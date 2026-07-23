@@ -1,0 +1,18 @@
+{
+  "process_name": "Palworld-Win64-Shipping.exe",
+  "game_label": "Palworld (ornek profil - offsetler bos)",
+  "cheats": [
+    {
+      "name": "Sonsuz Can (ornek - offset gir)",
+      "value_type": "float",
+      "offsets": [],
+      "hotkey": "f1"
+    },
+    {
+      "name": "Sonsuz Stamina (ornek - offset gir)",
+      "value_type": "float",
+      "offsets": [],
+      "hotkey": "f2"
+    }
+  ]
+}
