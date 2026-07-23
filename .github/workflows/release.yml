@@ -1,0 +1,98 @@
+name: Build and Release
+
+# Bu is akisi, "v1.2.0" gibi bir git tag push'landiginda otomatik calisir:
+#   1) Kodu Windows runner'a ceker
+#   2) updater.py'deki CURRENT_VERSION'i tag'e gore gunceller
+#   3) PyInstaller ile LocalTrainerStudio.exe'yi derler
+#   4) Inno Setup ile gercek bir LocalTrainerStudio-Setup.exe kurulum
+#      dosyasi uretir
+#   5) update_manifest.json'i yeni surum/SHA256/indirme linki ile
+#      gunceller ve repoya geri commit'ler (raw.githubusercontent.com
+#      linki hep guncel kalsin diye)
+#   6) GitHub Release olusturup Setup.exe'yi oraya yukler
+#
+# NASIL YAYIN YAPILIR (senin yapman gereken TEK sey):
+#   git tag v1.2.0
+#   git push origin v1.2.0
+# Geri kalan her sey otomatik olur.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - name: Kodu cek
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Python kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Surum numarasini tag'den al ve updater.py'ye yaz
+        id: version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag.TrimStart("v")
+          python build_scripts/set_version.py $version
+          echo "APP_VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Bagimliliklari kur
+        run: |
+          pip install -r requirements.txt
+
+      - name: PyInstaller ile exe derle
+        run: |
+          pyinstaller --onefile --noconsole --name LocalTrainerStudio --add-data "profiles;profiles" main.py
+
+      - name: Inno Setup kur
+        run: |
+          choco install innosetup -y --no-progress
+
+      - name: Setup.exe olustur
+        shell: pwsh
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=$env:APP_VERSION installer.iss
+
+      - name: SHA256 hesapla ve manifest uret
+        shell: pwsh
+        run: |
+          $downloadUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/LocalTrainerStudio-Setup.exe"
+          python build_scripts/generate_manifest.py `
+            --version $env:APP_VERSION `
+            --download-url $downloadUrl `
+            --sha256-file "installer_output\LocalTrainerStudio-Setup.exe" `
+            --changelog "Otomatik yayin: ${{ github.ref_name }}" `
+            --output update_manifest.json
+
+      - name: Manifest ve surum degisikligini repoya commitle
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add update_manifest.json updater.py
+          git commit -m "Release ${{ github.ref_name }}: manifest ve surum guncellendi" || echo "Degisiklik yok, commit atlaniyor"
+          git push origin HEAD:main
+
+      - name: GitHub Release olustur ve Setup.exe'yi yukle
+        uses: softprops/action-gh-release@v2
+        with:
+          files: installer_output/LocalTrainerStudio-Setup.exe
+          name: "LocalTrainer Studio ${{ github.ref_name }}"
+          body: |
+            Otomatik yayinlanan surum ${{ github.ref_name }}.
+
+            Kurulum: `LocalTrainerStudio-Setup.exe`'yi indirip calistir.
+            Uygulama zaten kuruluysa, icindeki "Guncelleme" sekmesinden de
+            otomatik olarak bu surume gecebilirsin.
+          generate_release_notes: true
