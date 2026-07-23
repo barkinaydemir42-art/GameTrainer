@@ -39,6 +39,7 @@ from hotkeys import HotkeyManager
 from script_engine import ScriptEngine, ScriptError
 import updater
 import config_manager
+import modern_theme
 
 REFRESH_MS = 500
 
@@ -221,7 +222,7 @@ class LocalTrainerStudio(QMainWindow):
         p1.addWidget(btn_attach)
 
         btn_detach = QPushButton("Baglantiyi Kes (Detach)")
-        btn_detach.setStyleSheet("background-color: #555555;")
+        btn_detach.setStyleSheet(modern_theme.DANGER_BUTTON_QSS)
         btn_detach.clicked.connect(self._detach)
         p1.addWidget(btn_detach)
 
@@ -758,7 +759,7 @@ class LocalTrainerStudio(QMainWindow):
         btn_unfreeze_all.clicked.connect(self._unfreeze_all)
         btn_row.addWidget(btn_unfreeze_all)
         btn_clear_all = QPushButton("Tumunu Sil")
-        btn_clear_all.setStyleSheet("background-color: #B71C1C;")
+        btn_clear_all.setStyleSheet(modern_theme.DANGER_BUTTON_QSS)
         btn_clear_all.clicked.connect(self._clear_all_watched)
         btn_row.addWidget(btn_clear_all)
         btn_save = QPushButton("Profili Kaydet")
@@ -1144,7 +1145,7 @@ class LocalTrainerStudio(QMainWindow):
         btn_nop.setToolTip("Yeni Bytelar kutusunu yoksayar, Adres'ten itibaren N byte'i 0x90 (NOP) ile doldurur.")
         btn_nop.clicked.connect(self._apply_nop_fill)
         btn_undo = QPushButton("Geri Al (Restore Original Bytes)")
-        btn_undo.setStyleSheet("background-color: #B71C1C; color: white;")
+        btn_undo.setStyleSheet(modern_theme.DANGER_BUTTON_QSS)
         btn_undo.clicked.connect(self._undo_patch)
         r3.addWidget(btn_patch)
         r3.addWidget(btn_nop)
@@ -1308,7 +1309,7 @@ class LocalTrainerStudio(QMainWindow):
         btn_row.addWidget(btn_check)
         self.btn_do_update = QPushButton("Simdi Guncelle")
         self.btn_do_update.setEnabled(False)
-        self.btn_do_update.setStyleSheet("background-color: #2e7d32;")
+        self.btn_do_update.setStyleSheet(modern_theme.SUCCESS_BUTTON_QSS)
         self.btn_do_update.clicked.connect(self._download_and_apply_update)
         btn_row.addWidget(self.btn_do_update)
         action_v.addLayout(btn_row)
@@ -1480,48 +1481,7 @@ class LocalTrainerStudio(QMainWindow):
 
     # ------------------------------------------------------------------
     def apply_theme(self):
-        self.setStyleSheet("""
-            QMainWindow, QWidget {
-                background-color: #1e1e1e;
-                color: #ffffff;
-                font-family: 'Segoe UI';
-                font-size: 13px;
-            }
-            QTabWidget::pane { border: 1px solid #333333; background-color: #252526; }
-            QTabBar::tab {
-                background-color: #2d2d2d; color: #b0b0b0; padding: 8px 16px;
-                margin-right: 2px; border-top-left-radius: 4px; border-top-right-radius: 4px;
-            }
-            QTabBar::tab:selected { background-color: #0d47a1; color: #ffffff; font-weight: bold; }
-            QTabBar::tab:hover { background-color: #383838; color: #ffffff; }
-            QTableWidget, QTextEdit, QListWidget {
-                background-color: #181818; color: #ffffff;
-                border: 1px solid #333333; gridline-color: #333333;
-            }
-            QHeaderView::section {
-                background-color: #2d2d2d; color: #ffffff; padding: 5px;
-                border: 1px solid #333333; font-weight: bold;
-            }
-            QPushButton {
-                background-color: #0d47a1; color: white; border-radius: 4px;
-                padding: 6px 14px; font-weight: bold; border: none;
-            }
-            QPushButton:hover { background-color: #1565c0; }
-            QPushButton:pressed { background-color: #0b3c7d; }
-            QLineEdit, QComboBox {
-                background-color: #2d2d2d; border: 1px solid #555555;
-                padding: 5px; color: white; border-radius: 3px;
-            }
-            QLineEdit:focus, QComboBox:focus { border: 1px solid #0d47a1; }
-            QGroupBox {
-                border: 1px solid #444444; margin-top: 15px; font-weight: bold;
-                color: #90caf9; border-radius: 4px; padding-top: 10px;
-            }
-            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }
-            QListWidget::item { padding: 6px; }
-            QListWidget::item:selected { background-color: #0d47a1; color: white; }
-            QStatusBar { background-color: #007acc; color: white; font-weight: bold; }
-        """)
+        modern_theme.apply_theme(self)
 
     def closeEvent(self, event):
         self.hotkeys.unregister_all()
