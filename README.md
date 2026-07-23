@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # LocalTrainer Studio — Merged Edition
 
 ## Değişiklik Günlüğü (Genel Denetim Sonrası)
@@ -147,6 +146,10 @@ dosyalarını otomatik üzerine yazması çok daha riskli bir işlemdir.
 İstersen bunlardan hangisine öncelik vermek istediğini söyle, onu
 uygulayayım.
 
+---
+
+## Proje Kökeni
+
 Bu proje iki parçayı birleştiriyor:
 - **Arayüz tasarımı**: senin yüklediğin `LocalTrainerStudio_Auto` projesindeki
   PyQt5 koyu tema, Wizard/Scanner/Freeze/Patch/Script sekme yapısı (bu
@@ -274,7 +277,7 @@ test edilerek doğrulandı.
 
 ## GitHub'a Yükleme ve Tam Otomatik Yayın (CI/CD) Kurulumu
 
-Bu bölüm, projeyi senin `barkinaydemir42-art/oyun-ceviri` reposuna yükleyip,
+Bu bölüm, projeyi senin `barkinaydemir42-art/GameTrainer` reposuna yükleyip,
 her yeni sürümde **otomatik olarak** gerçek bir `Setup.exe` kurulum dosyası
 üretecek ve uygulamanın "Güncelleme" sekmesinin göreceği manifesti
 güncelleyecek şekilde bağlamanı anlatır. Kurulumdan sonra senin yapman
@@ -289,7 +292,7 @@ Bu `.zip`'i açtığın klasörde (`LocalTrainerStudio/`) bir terminal aç:
 ```bash
 cd LocalTrainerStudio
 git init
-git remote add origin https://github.com/barkinaydemir42-art/oyun-ceviri.git
+git remote add origin https://github.com/barkinaydemir42-art/GameTrainer.git
 git add -A
 git commit -m "İlk yükleme: LocalTrainer Studio"
 git branch -M main
@@ -304,7 +307,7 @@ ama önce mevcut içeriği kaybetmek istemediğinden emin ol.)
 
 Uygulamayı aç → **Güncelleme** sekmesi → Manifest URL alanına şunu yaz:
 ```
-https://raw.githubusercontent.com/barkinaydemir42-art/oyun-ceviri/main/update_manifest.json
+https://raw.githubusercontent.com/barkinaydemir42-art/GameTrainer/main/update_manifest.json
 ```
 **Kaydet**'e bas. Artık uygulama her açıldığında (veya "Kontrol Et"e
 bastığında) bu dosyayı kontrol edecek.
@@ -331,7 +334,7 @@ yok):
    oraya yüklenir
 
 İlerlemeyi GitHub reposunun **Actions** sekmesinden izleyebilirsin
-(`https://github.com/barkinaydemir42-art/oyun-ceviri/actions`).
+(`https://github.com/barkinaydemir42-art/GameTrainer/actions`).
 İşlem bitince **Releases** sekmesinde `LocalTrainerStudio-Setup.exe`'yi
 görürsün — bunu ilk kurulum için istediğin bilgisayara indirip çalıştırman
 yeterli.
@@ -370,11 +373,8 @@ ile). Artık:
 
 ### Gereksinimler (bir kereye mahsus)
 - GitHub reposu **public** olmalı (raw.githubusercontent.com linkinin
-  kimlik doğrulamasız erişilebilir olması için — zaten `oyun-ceviri`
+  kimlik doğrulamasız erişilebilir olması için — zaten `GameTrainer`
   reposu ekran görüntünde "Public" görünüyor, bu yeterli).
 - Ekstra bir "secret" veya token eklemene gerek yok — GitHub Actions,
   Release oluşturmak ve repoya commit atmak için gereken izni
   (`permissions: contents: write`) iş akışı dosyasının kendisinden alıyor.
-=======
-# GameTrainer
->>>>>>> ec58d257b706beb51ef881c926ea9d19d4111254
