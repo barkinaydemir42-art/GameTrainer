@@ -420,3 +420,38 @@ Bu üç düzeltmeden sonra yeni bir `git tag` (örn. `v1.1.3`) push'layarak
 (veya GitHub'da "Create a new release" ile) otomatik olarak dağıtabilirsin;
 zaten kurulu kullanıcılar "Güncelleme" sekmesinden bu düzeltmeleri
 otomatik alacak.
+
+---
+
+## Dördüncü Tur Düzeltme: "Yanıt Vermiyor" Donması (KRİTİK)
+
+Gerçek kullanımda "Pointer Zinciri Bul" sırasında uygulama "Yanıt Vermiyor"
+durumuna düştü. Kök sebep: **First Scan, Next Scan, AOB Tarama, Bilinmeyen
+İlk Değer Taraması ve Pointer Zinciri Bul dahil TÜM ağır bellek tarama
+işlemleri, ana arayüz (UI) thread'inde çalıştırılıyordu.** Küçük oyunlarda
+bu fark edilmeyebiliyordu, ama büyük bir oyunun belleğinde (özellikle
+2 seviyeli pointer scan — her aday için belleği baştan tarıyor) bu işlem
+saniyelerce/dakikalarca sürdüğünde, Qt'nin olay döngüsü (event loop)
+pompalanamadığı için Windows pencereyi "Yanıt Vermiyor" olarak işaretliyordu.
+Program çökmüyordu ama kullanıcıya çökmüş gibi görünüyordu.
+
+**Düzeltme:** Yeni bir `ScanWorker(QThread)` sınıfı eklendi — artık First
+Scan, Next Scan, AOB Tarama, Bilinmeyen İlk Değer taraması ve Pointer
+Zinciri Bul dahil **tüm ağır tarama işlemleri arka plan thread'inde**
+çalışıyor. Bu, sahte bir "yavaş" fonksiyonla gerçek bir testle kanıtlandı:
+tarama sürerken ana thread'in gerçekten boş kaldığı (bir QTimer'ın düzenli
+tik attığı) ölçüldü.
+
+Ek olarak:
+- Pointer Zinciri Bul artık **"Hızlı (1 seviye)" / "Detaylı (2 seviye,
+  çok yavaş)"** seçimi sunuyor — varsayılan olarak kullanıcı bilinçli
+  bir hız/detay tercihi yapıyor.
+- 2. seviye pointer taramasındaki aday sınırı 30'dan 12'ye düşürüldü
+  (her aday, tüm belleği baştan tarayan ayrı bir işlem tetikliyor).
+- Tarama sırasında ilgili butonlar devre dışı bırakılıyor, aynı anda
+  birden fazla taramanın çakışması (ve MemoryEngine'in iç durumunun
+  bozulması) engelleniyor.
+
+Bu düzeltmeden sonra yeni bir sürüm (örn. `v1.1.4`) yayınlayabilirsin;
+"Pointer Zinciri Bul" veya herhangi bir tarama artık ne kadar uzun sürerse
+sürsün, pencere donmayacak, "Yanıt Vermiyor" görülmeyecek.

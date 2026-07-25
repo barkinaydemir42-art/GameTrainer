@@ -555,7 +555,13 @@ class MemoryEngine:
         if max_level >= 2:
             # Performans icin ikinci seviyede sadece ilk N aday genisletilir
             # (her biri icin ayrica tum bellek tekrar taranir - agir islemdir).
-            for mid_addr, mid_ptr_val in non_static_level1[:30]:
+            # NOT: Bu deger dusuruldu (30 -> 12). Her aday, ASAGIDA
+            # tum bellegi TEKRAR tarayan agir bir _find_pointer_candidates
+            # cagrisi tetikler - 30 aday, gercek oyunlarda dakikalarca
+            # surebiliyordu. Artik bu tarama arka plan thread'inde
+            # calistigi icin arayuz artik kilitlenmiyor, ama yine de
+            # makul bir sinirla tutuyoruz.
+            for mid_addr, mid_ptr_val in non_static_level1[:12]:
                 if len(chains) >= max_results:
                     break
                 offset1 = target_address - mid_ptr_val

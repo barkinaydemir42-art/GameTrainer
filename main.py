@@ -44,6 +44,37 @@ from app_paths import get_app_data_dir
 REFRESH_MS = 500
 
 
+class ScanWorker(QThread):
+    """
+    Herhangi bir agir MemoryEngine cagrisini (first_scan, next_scan,
+    pattern_scan, find_pointers_to, vb.) arka planda calistirir.
+
+    ONCEKI HATA: bu tarama fonksiyonlari dogrudan buton click handler'i
+    icinde, ana arayuz (UI) thread'inde cagriliyordu. Buyuk oyunlarda
+    (GB'larca bellek + ozellikle 2 seviyeli pointer scan icin onlarca
+    tekrar tarama) bu islem uzun surdugunde, Qt'nin event loop'u pompalanamadigi
+    icin Windows pencereyi "Yanit Vermiyor" olarak isaretliyordu - programin
+    kendisi cokmuyordu ama kullaniciya cokmus gibi gorunuyordu. Artik TUM
+    tarama cagrilari bu QThread uzerinden yapiliyor, ana pencere her zaman
+    yanit veriyor.
+    """
+    finished_ok = pyqtSignal(object)
+    finished_error = pyqtSignal(str)
+
+    def __init__(self, fn, *args, **kwargs):
+        super().__init__()
+        self.fn = fn
+        self.args = args
+        self.kwargs = kwargs
+
+    def run(self):
+        try:
+            result = self.fn(*self.args, **self.kwargs)
+            self.finished_ok.emit(result)
+        except Exception as e:
+            self.finished_error.emit(str(e))
+
+
 class UpdateCheckWorker(QThread):
     """Guncelleme kontrolunu ve indirmeyi arka planda (UI dondurmadan) yapar."""
     check_finished = pyqtSignal(object)   # UpdateInfo veya None
@@ -487,6 +518,51 @@ class LocalTrainerStudio(QMainWindow):
             return False
         return True
 
+    def _run_scan_in_background(self, status_message: str, fn, on_success, *args, **kwargs):
+        """
+        Herhangi bir agir MemoryEngine cagrisini ScanWorker uzerinden arka
+        planda calistirir; sonuc gelince on_success(result) cagrilir.
+        Ayni anda birden fazla tarama calismasini engeller (MemoryEngine
+        ic durumu - _last_results vb. - es zamanli erisime karsi guvenli
+        degildir).
+        """
+        if getattr(self, "_scan_running", False):
+            QMessageBox.information(
+                self, "Bilgi", "Zaten devam eden bir tarama var, bitmesini bekle."
+            )
+            return
+        self._scan_running = True
+        self._set_scan_buttons_enabled(False)
+        self.status_bar.showMessage(status_message)
+
+        self.scan_worker = ScanWorker(fn, *args, **kwargs)
+
+        def _on_ok(result):
+            self._scan_running = False
+            self._set_scan_buttons_enabled(True)
+            on_success(result)
+
+        def _on_error(error_msg):
+            self._scan_running = False
+            self._set_scan_buttons_enabled(True)
+            self.status_bar.showMessage("Hazir.")
+            QMessageBox.critical(self, "Hata", f"Tarama hatasi:\n{error_msg}")
+
+        self.scan_worker.finished_ok.connect(_on_ok)
+        self.scan_worker.finished_error.connect(_on_error)
+        self.scan_worker.start()
+
+    def _set_scan_buttons_enabled(self, enabled: bool):
+        """Tarama sirasinda ayni islemi tekrar tetiklemeyi engellemek icin
+        ilgili butonlari devre disi birakir/geri acar."""
+        for attr_name in (
+            "btn_first_scan", "btn_next_scan", "btn_unknown_first_scan",
+            "btn_unknown_next_scan", "btn_aob_scan", "btn_pointer_scan",
+        ):
+            btn = getattr(self, attr_name, None)
+            if btn is not None:
+                btn.setEnabled(enabled)
+
     # ------------------------------------------------------------------
     # 2) SCANNER & AUTO AOB
     # ------------------------------------------------------------------
@@ -507,21 +583,21 @@ class LocalTrainerStudio(QMainWindow):
         row0.addWidget(QLabel("Deger:"))
         self.scan_value_edit = QLineEdit(placeholderText="Aranacak/Yeni Deger...")
         row0.addWidget(self.scan_value_edit)
-        btn_first = QPushButton("First Scan")
+        self.btn_first_scan = btn_first = QPushButton("First Scan")
         btn_first.clicked.connect(self._first_scan)
         row0.addWidget(btn_first)
 
         self.scan_mode_combo = QComboBox()
         self.scan_mode_combo.addItems(["exact", "changed", "unchanged", "increased", "decreased"])
         row0.addWidget(self.scan_mode_combo)
-        btn_next = QPushButton("Next Scan")
+        self.btn_next_scan = btn_next = QPushButton("Next Scan")
         btn_next.clicked.connect(self._next_scan)
         row0.addWidget(btn_next)
         scan_v.addLayout(row0)
 
         # ---- Bilinmeyen Ilk Deger (Unknown Initial Value) ----
         unknown_row = QHBoxLayout()
-        btn_unknown_first = QPushButton("Bilinmeyen Ilk Deger: Tara")
+        self.btn_unknown_first_scan = btn_unknown_first = QPushButton("Bilinmeyen Ilk Deger: Tara")
         btn_unknown_first.setToolTip(
             "Aranan sayiyi bilmiyorsan kullan. Once bu butona bas (tum bellegin\n"
             "anlik goruntusunu alir), sonra oyunda degeri degistir, sonra asagidaki\n"
@@ -532,7 +608,7 @@ class LocalTrainerStudio(QMainWindow):
         self.unknown_mode_combo = QComboBox()
         self.unknown_mode_combo.addItems(["changed", "unchanged", "increased", "decreased"])
         unknown_row.addWidget(self.unknown_mode_combo)
-        btn_unknown_next = QPushButton("Bilinmeyen: Filtrele")
+        self.btn_unknown_next_scan = btn_unknown_next = QPushButton("Bilinmeyen: Filtrele")
         btn_unknown_next.clicked.connect(self._unknown_next_scan)
         unknown_row.addWidget(btn_unknown_next)
         scan_v.addLayout(unknown_row)
@@ -562,7 +638,7 @@ class LocalTrainerStudio(QMainWindow):
         row1.addWidget(QLabel("Pattern:"))
         self.aob_pattern_edit = QLineEdit(placeholderText="Ornek: A1 ?? ?? ?? ?? 8B 45 FC")
         row1.addWidget(self.aob_pattern_edit)
-        btn_aob_scan = QPushButton("Tara")
+        self.btn_aob_scan = btn_aob_scan = QPushButton("Tara")
         btn_aob_scan.clicked.connect(self._aob_scan)
         row1.addWidget(btn_aob_scan)
         aob_layout.addLayout(row1)
@@ -587,37 +663,33 @@ class LocalTrainerStudio(QMainWindow):
         reply = QMessageBox.question(
             self, "Emin misin?",
             "Bu islem TUM bellegin bir anlik goruntusunu alir ve biraz zaman/RAM\n"
-            "harcayabilir (buyuk oyunlarda onlarca saniye surebilir). Devam edilsin mi?",
+            "harcayabilir (buyuk oyunlarda onlarca saniye surebilir). Arayuz bu\n"
+            "sirada yanit vermeye devam edecek. Devam edilsin mi?",
             QMessageBox.Yes | QMessageBox.No,
         )
         if reply != QMessageBox.Yes:
             return
-        self.status_bar.showMessage("Bilinmeyen ilk deger taraniyor (snapshot aliniyor)...")
-        QApplication.processEvents()
-        try:
-            count = self.engine.first_scan_unknown(vtype)
-        except Exception as e:
-            QMessageBox.critical(self, "Hata", f"Tarama hatasi:\n{e}")
-            return
-        self.status_bar.showMessage(f"Snapshot alindi: {count} adres izleniyor.")
-        self.log(
-            f"Bilinmeyen ilk deger snapshot'i alindi ({count} adres, tip={vtype}). "
-            "Simdi oyunda degeri degistir ve 'Bilinmeyen: Filtrele'ye bas."
+
+        def on_success(count):
+            self.status_bar.showMessage(f"Snapshot alindi: {count} adres izleniyor.")
+            self.log(
+                f"Bilinmeyen ilk deger snapshot'i alindi ({count} adres, tip={vtype}). "
+                "Simdi oyunda degeri degistir ve 'Bilinmeyen: Filtrele'ye bas."
+            )
+
+        self._run_scan_in_background(
+            "Bilinmeyen ilk deger taraniyor (snapshot aliniyor)...",
+            self.engine.first_scan_unknown, on_success, vtype,
         )
 
     def _unknown_next_scan(self):
         if not self._require_attached():
             return
         mode = self.unknown_mode_combo.currentText()
-        try:
-            results = self.engine.next_scan_unknown(mode=mode)
-        except ValueError as e:
-            QMessageBox.warning(self, "Uyari", str(e))
-            return
-        except Exception as e:
-            QMessageBox.critical(self, "Hata", f"Filtreleme hatasi:\n{e}")
-            return
-        self._populate_scan_results(results)
+        self._run_scan_in_background(
+            "Filtreleniyor...", self.engine.next_scan_unknown,
+            self._populate_scan_results, mode=mode,
+        )
 
     def _first_scan(self):
         if not self._require_attached():
@@ -629,14 +701,10 @@ class LocalTrainerStudio(QMainWindow):
         except ValueError:
             QMessageBox.warning(self, "Uyari", "Gecerli bir deger gir.")
             return
-        self.status_bar.showMessage("Taraniyor...")
-        QApplication.processEvents()
-        try:
-            results = self.engine.first_scan(value, vtype)
-        except Exception as e:
-            QMessageBox.critical(self, "Hata", f"Tarama hatasi:\n{e}")
-            return
-        self._populate_scan_results(results)
+        self._run_scan_in_background(
+            "Taraniyor...", self.engine.first_scan,
+            self._populate_scan_results, value, vtype,
+        )
 
     def _next_scan(self):
         if not self._require_attached():
@@ -651,12 +719,10 @@ class LocalTrainerStudio(QMainWindow):
             except ValueError:
                 QMessageBox.warning(self, "Uyari", "Gecerli bir deger gir.")
                 return
-        try:
-            results = self.engine.next_scan(vtype, mode=mode, value=value)
-        except Exception as e:
-            QMessageBox.critical(self, "Hata", f"Tarama hatasi:\n{e}")
-            return
-        self._populate_scan_results(results)
+        self._run_scan_in_background(
+            "Taraniyor...", self.engine.next_scan,
+            self._populate_scan_results, vtype, mode=mode, value=value,
+        )
 
     def _populate_scan_results(self, results):
         self.scan_result_table.setRowCount(0)
@@ -696,17 +762,17 @@ class LocalTrainerStudio(QMainWindow):
         if not pattern:
             QMessageBox.warning(self, "Uyari", "Bir pattern gir (ornek: A1 ?? ?? ?? ??).")
             return
-        self.status_bar.showMessage("AOB taraniyor (buyuk bellekte biraz surebilir)...")
-        QApplication.processEvents()
-        try:
-            addresses = self.engine.pattern_scan(pattern, max_results=200)
-        except Exception as e:
-            QMessageBox.critical(self, "Hata", f"AOB tarama hatasi:\n{e}")
-            return
-        self.aob_result_list.clear()
-        for addr in addresses:
-            self.aob_result_list.addItem(hex(addr))
-        self.status_bar.showMessage(f"AOB tarama tamamlandi: {len(addresses)} sonuc.")
+
+        def on_success(addresses):
+            self.aob_result_list.clear()
+            for addr in addresses:
+                self.aob_result_list.addItem(hex(addr))
+            self.status_bar.showMessage(f"AOB tarama tamamlandi: {len(addresses)} sonuc.")
+
+        self._run_scan_in_background(
+            "AOB taraniyor (buyuk bellekte biraz surebilir)...",
+            self.engine.pattern_scan, on_success, pattern, max_results=200,
+        )
 
     def _add_aob_result_to_watchlist(self, item: QListWidgetItem):
         address = int(item.text(), 16)
@@ -745,7 +811,7 @@ class LocalTrainerStudio(QMainWindow):
         btn_hotkey = QPushButton("Sec: Hotkey Ata")
         btn_hotkey.clicked.connect(self._assign_hotkey_selected)
         btn_row.addWidget(btn_hotkey)
-        btn_pointer_scan = QPushButton("Sec: Pointer Zinciri Bul (Kalici Yap)")
+        self.btn_pointer_scan = btn_pointer_scan = QPushButton("Sec: Pointer Zinciri Bul (Kalici Yap)")
         btn_pointer_scan.setToolTip(
             "Secili cheat'in ham adresi icin, oyun yeniden baslasa da gecerli\n"
             "kalacak bir modul+offset zinciri bulmaya calisir. AGIR bir islemdir."
@@ -894,48 +960,49 @@ class LocalTrainerStudio(QMainWindow):
             return
         if not self._require_attached():
             return
-        reply = QMessageBox.question(
-            self, "Emin misin?",
-            "Bu islem bellekte pointer adaylarini arar - buyuk oyunlarda\n"
-            "onlarca saniye surebilir. Devam edilsin mi?",
-            QMessageBox.Yes | QMessageBox.No,
-        )
-        if reply != QMessageBox.Yes:
-            return
-        self.status_bar.showMessage("Pointer zinciri araniyor...")
-        QApplication.processEvents()
-        try:
-            chains = self.engine.find_pointers_to(wa.address, max_level=2)
-        except Exception as e:
-            QMessageBox.critical(self, "Hata", f"Pointer scan hatasi:\n{e}")
-            self.status_bar.showMessage("Hazir.")
-            return
-        self.status_bar.showMessage("Hazir.")
-        if not chains:
-            QMessageBox.information(
-                self, "Sonuc Yok",
-                "Bu adres icin kalici bir pointer zinciri bulunamadi.\n"
-                "Cheat Engine'de manuel pointer scan yapman gerekebilir."
-            )
-            return
-        # Kullaniciya bulunan zincirleri sun, birini secsin
-        labels = [f"{i+1}) offsets={chain}" for i, chain in enumerate(chains[:50])]
-        label, ok = QInputDialog.getItem(
-            self, "Pointer Zinciri Sec",
-            f"{len(chains)} aday bulundu (en fazla 50 gosteriliyor). "
-            "Birini sec (ilk siradaki genelde en guvenilir):",
-            labels, editable=False,
+
+        choice, ok = QInputDialog.getItem(
+            self, "Tarama Derinligi",
+            "Hizli: sadece dogrudan (statik) pointer'lari arar, saniyeler surer.\n"
+            "Detayli: 2 seviyeli arar (daha fazla sonuc bulabilir) ama HER aday\n"
+            "icin tum bellegi tekrar tarar - buyuk oyunlarda dakikalar surebilir.",
+            ["Hizli (1 seviye)", "Detayli (2 seviye, cok yavas)"], editable=False,
         )
         if not ok:
             return
-        chosen_idx = labels.index(label)
-        wa.offsets = chains[chosen_idx]
-        self.log(f"'{wa.name}' icin kalici pointer zinciri atandi: {wa.offsets}")
-        self._refresh_freeze_table()
-        QMessageBox.information(
-            self, "Basarili",
-            f"'{wa.name}' artik kalici bir pointer zinciri kullaniyor.\n"
-            "Bunu koru diye 'Profili Kaydet'e basmayi unutma."
+        max_level = 1 if choice.startswith("Hizli") else 2
+
+        def on_success(chains):
+            self.status_bar.showMessage("Hazir.")
+            if not chains:
+                QMessageBox.information(
+                    self, "Sonuc Yok",
+                    "Bu adres icin kalici bir pointer zinciri bulunamadi.\n"
+                    "Cheat Engine'de manuel pointer scan yapman gerekebilir."
+                )
+                return
+            labels = [f"{i+1}) offsets={chain}" for i, chain in enumerate(chains[:50])]
+            label, ok2 = QInputDialog.getItem(
+                self, "Pointer Zinciri Sec",
+                f"{len(chains)} aday bulundu (en fazla 50 gosteriliyor). "
+                "Birini sec (ilk siradaki genelde en guvenilir):",
+                labels, editable=False,
+            )
+            if not ok2:
+                return
+            chosen_idx = labels.index(label)
+            wa.offsets = chains[chosen_idx]
+            self.log(f"'{wa.name}' icin kalici pointer zinciri atandi: {wa.offsets}")
+            self._refresh_freeze_table()
+            QMessageBox.information(
+                self, "Basarili",
+                f"'{wa.name}' artik kalici bir pointer zinciri kullaniyor.\n"
+                "Bunu koru diye 'Profili Kaydet'e basmayi unutma."
+            )
+
+        self._run_scan_in_background(
+            "Pointer zinciri araniyor (arayuz yanit vermeye devam edecek)...",
+            self.engine.find_pointers_to, on_success, wa.address, max_level=max_level,
         )
 
     def _change_type_for_selected(self):
