@@ -39,7 +39,7 @@ from hotkeys import HotkeyManager
 from script_engine import ScriptEngine, ScriptError
 import updater
 import config_manager
-import modern_theme
+from app_paths import get_app_data_dir
 
 REFRESH_MS = 500
 
@@ -136,7 +136,7 @@ class LocalTrainerStudio(QMainWindow):
 
         # Loglari ayrica bir dosyaya da yaz - uygulama kapandiktan sonra
         # da hata ayiklamak/gecmisi incelemek icin.
-        logs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+        logs_dir = os.path.join(get_app_data_dir(), "logs")
         os.makedirs(logs_dir, exist_ok=True)
         session_name = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         self.log_file_path = os.path.join(logs_dir, f"session_{session_name}.log")
@@ -222,7 +222,7 @@ class LocalTrainerStudio(QMainWindow):
         p1.addWidget(btn_attach)
 
         btn_detach = QPushButton("Baglantiyi Kes (Detach)")
-        btn_detach.setStyleSheet(modern_theme.DANGER_BUTTON_QSS)
+        btn_detach.setStyleSheet("background-color: #555555;")
         btn_detach.clicked.connect(self._detach)
         p1.addWidget(btn_detach)
 
@@ -752,6 +752,14 @@ class LocalTrainerStudio(QMainWindow):
         )
         btn_pointer_scan.clicked.connect(self._find_pointer_chain_for_selected)
         btn_row.addWidget(btn_pointer_scan)
+        btn_change_type = QPushButton("Sec: Tip Degistir")
+        btn_change_type.setToolTip(
+            "Yanlis tip secilmisse (ornek: Cheat Engine'de '4 Bytes' bulup\n"
+            "buraya yanlislikla 'int16' ile eklediysen) silip yeniden\n"
+            "eklemene gerek yok - buradan duzeltebilirsin."
+        )
+        btn_change_type.clicked.connect(self._change_type_for_selected)
+        btn_row.addWidget(btn_change_type)
         btn_remove = QPushButton("Sec: Sil")
         btn_remove.clicked.connect(self._remove_selected)
         btn_row.addWidget(btn_remove)
@@ -759,7 +767,7 @@ class LocalTrainerStudio(QMainWindow):
         btn_unfreeze_all.clicked.connect(self._unfreeze_all)
         btn_row.addWidget(btn_unfreeze_all)
         btn_clear_all = QPushButton("Tumunu Sil")
-        btn_clear_all.setStyleSheet(modern_theme.DANGER_BUTTON_QSS)
+        btn_clear_all.setStyleSheet("background-color: #B71C1C;")
         btn_clear_all.clicked.connect(self._clear_all_watched)
         btn_row.addWidget(btn_clear_all)
         btn_save = QPushButton("Profili Kaydet")
@@ -929,6 +937,31 @@ class LocalTrainerStudio(QMainWindow):
             f"'{wa.name}' artik kalici bir pointer zinciri kullaniyor.\n"
             "Bunu koru diye 'Profili Kaydet'e basmayi unutma."
         )
+
+    def _change_type_for_selected(self):
+        """
+        Var olan bir cheat'in deger tipini degistirir (silip yeniden
+        eklemeye gerek kalmadan). Ozellikle Cheat Engine'de '4 Bytes'
+        (int32) olarak bulunup buraya yanlislikla farkli bir tiple
+        (ornek: int16) eklenmis adresleri duzeltmek icin kullanislidir.
+        """
+        idx = self._selected_watched_index()
+        if idx is None:
+            QMessageBox.information(self, "Bilgi", "Once listeden bir satir sec.")
+            return
+        wa = self.watched[idx]
+        current_index = ALL_TYPES.index(wa.value_type) if wa.value_type in ALL_TYPES else 0
+        new_type, ok = QInputDialog.getItem(
+            self, "Tip Degistir",
+            f"'{wa.name}' icin dogru tipi sec (Cheat Engine 'X Bytes' gosteriyorsa: "
+            "4 Bytes=int32, 8 Bytes=int64, 2 Bytes=int16, 1 Byte=byte):",
+            ALL_TYPES, current=current_index, editable=False,
+        )
+        if not ok or new_type == wa.value_type:
+            return
+        wa.value_type = new_type
+        self.log(f"'{wa.name}' tipi degistirildi -> {new_type}")
+        self._refresh_freeze_table()
 
     def _bind_hotkey(self, wa: WatchedAddress):
         if not wa.hotkey:
@@ -1145,7 +1178,7 @@ class LocalTrainerStudio(QMainWindow):
         btn_nop.setToolTip("Yeni Bytelar kutusunu yoksayar, Adres'ten itibaren N byte'i 0x90 (NOP) ile doldurur.")
         btn_nop.clicked.connect(self._apply_nop_fill)
         btn_undo = QPushButton("Geri Al (Restore Original Bytes)")
-        btn_undo.setStyleSheet(modern_theme.DANGER_BUTTON_QSS)
+        btn_undo.setStyleSheet("background-color: #B71C1C; color: white;")
         btn_undo.clicked.connect(self._undo_patch)
         r3.addWidget(btn_patch)
         r3.addWidget(btn_nop)
@@ -1309,7 +1342,7 @@ class LocalTrainerStudio(QMainWindow):
         btn_row.addWidget(btn_check)
         self.btn_do_update = QPushButton("Simdi Guncelle")
         self.btn_do_update.setEnabled(False)
-        self.btn_do_update.setStyleSheet(modern_theme.SUCCESS_BUTTON_QSS)
+        self.btn_do_update.setStyleSheet("background-color: #2e7d32;")
         self.btn_do_update.clicked.connect(self._download_and_apply_update)
         btn_row.addWidget(self.btn_do_update)
         action_v.addLayout(btn_row)
@@ -1481,7 +1514,48 @@ class LocalTrainerStudio(QMainWindow):
 
     # ------------------------------------------------------------------
     def apply_theme(self):
-        modern_theme.apply_theme(self)
+        self.setStyleSheet("""
+            QMainWindow, QWidget {
+                background-color: #1e1e1e;
+                color: #ffffff;
+                font-family: 'Segoe UI';
+                font-size: 13px;
+            }
+            QTabWidget::pane { border: 1px solid #333333; background-color: #252526; }
+            QTabBar::tab {
+                background-color: #2d2d2d; color: #b0b0b0; padding: 8px 16px;
+                margin-right: 2px; border-top-left-radius: 4px; border-top-right-radius: 4px;
+            }
+            QTabBar::tab:selected { background-color: #0d47a1; color: #ffffff; font-weight: bold; }
+            QTabBar::tab:hover { background-color: #383838; color: #ffffff; }
+            QTableWidget, QTextEdit, QListWidget {
+                background-color: #181818; color: #ffffff;
+                border: 1px solid #333333; gridline-color: #333333;
+            }
+            QHeaderView::section {
+                background-color: #2d2d2d; color: #ffffff; padding: 5px;
+                border: 1px solid #333333; font-weight: bold;
+            }
+            QPushButton {
+                background-color: #0d47a1; color: white; border-radius: 4px;
+                padding: 6px 14px; font-weight: bold; border: none;
+            }
+            QPushButton:hover { background-color: #1565c0; }
+            QPushButton:pressed { background-color: #0b3c7d; }
+            QLineEdit, QComboBox {
+                background-color: #2d2d2d; border: 1px solid #555555;
+                padding: 5px; color: white; border-radius: 3px;
+            }
+            QLineEdit:focus, QComboBox:focus { border: 1px solid #0d47a1; }
+            QGroupBox {
+                border: 1px solid #444444; margin-top: 15px; font-weight: bold;
+                color: #90caf9; border-radius: 4px; padding-top: 10px;
+            }
+            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }
+            QListWidget::item { padding: 6px; }
+            QListWidget::item:selected { background-color: #0d47a1; color: white; }
+            QStatusBar { background-color: #007acc; color: white; font-weight: bold; }
+        """)
 
     def closeEvent(self, event):
         self.hotkeys.unregister_all()

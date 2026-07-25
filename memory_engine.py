@@ -20,15 +20,24 @@ import pymem.process
 # Not: 'byte' bilincli olarak UNSIGNED (0-255) - kullanicilar genelde
 # kucuk sayilari (14, 100, 200 gibi) "byte" olarak arar ve 127 uzeri
 # degerlerde eskiden struct.error firlatiliyordu.
+# ---- Tip tanımları ----
+# NOT: SIRALAMA ONEMLI - bu sozlukteki ILK eleman, arayuzdeki tum tip
+# secim kutularinda (QComboBox/QInputDialog) VARSAYILAN olarak secili
+# gelir. Eskiden 'int16' ilk siradaydi; bu, kullanicilarin (varsayilani
+# degistirmeyi unutup) yanlislikla 2-byte okuma yapmasina, oysa oyunlarin
+# buyuk cogunlugunun stat/para/mermi degerlerini 4-byte (int32/float)
+# sakladigina yol acan gercek bir hataydi - Cheat Engine'in kendi
+# varsayilani da "4 Bytes" (int32) oldugu icin artik burada da ayni
+# varsayilanla tutarli olacak sekilde int32 ILK SIRAYA alindi.
 TYPE_MAP = {
-    "int16": ("h", 2),
-    "uint16": ("H", 2),
     "int32": ("i", 4),
+    "float": ("f", 4),
     "uint32": ("I", 4),
     "int64": ("q", 8),
     "uint64": ("Q", 8),
-    "float": ("f", 4),
     "double": ("d", 8),
+    "int16": ("h", 2),
+    "uint16": ("H", 2),
     "byte": ("B", 1),
 }
 ALL_TYPES = list(TYPE_MAP.keys())

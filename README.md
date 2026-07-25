@@ -378,3 +378,45 @@ ile). Artık:
 - Ekstra bir "secret" veya token eklemene gerek yok — GitHub Actions,
   Release oluşturmak ve repoya commit atmak için gereken izni
   (`permissions: contents: write`) iş akışı dosyasının kendisinden alıyor.
+
+---
+
+## Üçüncü Tur Düzeltmeler (Gerçek Kullanımda Bulunan Hatalar)
+
+### 1) KRİTİK: Varsayılan tip `int16` idi, Cheat Engine'in `int32` ("4 Bytes") varsayılanıyla uyuşmuyordu
+Cheat Engine'de "4 Bytes" olarak bulduğun bir değeri bizim uygulamada
+ararken/eklerken, tip seçim kutuları listedeki **ilk elemanı** (`int16`)
+varsayılan gösteriyordu. Küçük sayılarda bu tesadüfen "doğru görünüyordu"
+(değerin üst 2 byte'ı sıfır olduğu için), ama gerçekte yanlış boyutta
+okuma/yazma yapılıyordu — değer büyüdüğünde veya freeze (dondurma)
+kullanıldığında bu, belleğin yanlış kısmına yazıp bozulmaya yol açabilirdi.
+**Düzeltme:** `TYPE_MAP` sıralaması `int32` ilk sıraya alınacak şekilde
+değiştirildi (Cheat Engine'in "4 Bytes" varsayılanıyla tutarlı).
+
+### 2) Yeni özellik: "Sec: Tip Degistir"
+Yanlış tiple eklenmiş bir cheat'i silip yeniden eklemene gerek kalmadan,
+Freeze Manager'dan doğrudan doğru tipe (örn. int16 → int32) çevirebilirsin.
+
+### 3) KRİTİK: Derlenmiş `.exe` sürümünde profiller/ayarlar kalıcı değildi
+`profile_manager.py`, `config_manager.py` ve log dosyası, modülün
+`__file__` konumuna göre bir yol hesaplıyordu. Kaynak koddan çalışırken bu
+sorunsuzdu, ama **PyInstaller `--onefile` ile derlenmiş bir `.exe`
+çalıştırıldığında, tüm modüller Windows'un geçici (`%TEMP%\_MEIxxxxxx`)
+klasöründen çalışır** — yani kaydettiğin her profil, ayar ve log, uygulamayı
+kapattığın an Windows tarafından otomatik silinen bir klasöre yazılıyordu!
+**Düzeltme:** Yeni `app_paths.py` modülü eklendi — derlenmiş `.exe` halinde
+`%LOCALAPPDATA%\LocalTrainerStudio` gibi kalıcı bir klasör kullanılıyor,
+kaynak koddan çalışırken eskisi gibi proje klasörünün yanına yazılıyor.
+Bu, sahte "frozen" ortam simülasyonuyla gerçek bir testle doğrulandı.
+
+### 4) İyileştirme: `--uac-admin` ile otomatik yönetici yetkisi
+Bellek okuma/yazma genelde yönetici yetkisi gerektirir. Kullanıcının her
+seferinde "Yönetici olarak çalıştır"ı elle seçmeyi unutma riskini ortadan
+kaldırmak için, derlenen `.exe`'ye artık `--uac-admin` bayrağıyla bir
+manifest gömülüyor — çift tıklandığında otomatik olarak UAC yükseltme
+istiyor.
+
+Bu üç düzeltmeden sonra yeni bir `git tag` (örn. `v1.1.3`) push'layarak
+(veya GitHub'da "Create a new release" ile) otomatik olarak dağıtabilirsin;
+zaten kurulu kullanıcılar "Güncelleme" sekmesinden bu düzeltmeleri
+otomatik alacak.

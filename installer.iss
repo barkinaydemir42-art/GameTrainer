@@ -51,12 +51,17 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
-; PyInstaller --onefile ciktisi (build.bat calistirildiktan sonra dist/ altinda olusur)
+; PyInstaller --onefile ciktisi (build.bat calistirildiktan sonra dist/ altinda olusur).
+; --uac-admin bayragi sayesinde bu exe, cift tiklandiginda HER ZAMAN
+; yonetici yetkisi ister (memory read/write islemleri genelde bunu
+; gerektirir - elle "yonetici olarak calistir" secmeyi unutma riskini ortadan kaldirir).
 Source: "dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-; Profiller ve ornek dosyalar da kurulumla birlikte gelsin (ilk calistirmada
-; bos degilse diye - kullanicinin kendi profilleri {app}\profiles altinda birikir)
-Source: "profiles\*"; DestDir: "{app}\profiles"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
+; NOT: profiller/ayarlar/loglar ARTIK Program Files altina degil,
+; %LOCALAPPDATA%\LocalTrainerStudio klasorune yaziliyor (bkz. app_paths.py).
+; Bu, Program Files'in normalde yazma korumali olmasindan kaynaklanan
+; "profilim kayboluyor" sorununu onler - bu yuzden burada profiles/
+; klasorunu Program Files'a kopyalamiyoruz, gereksiz olurdu.
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

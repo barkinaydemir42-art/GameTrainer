@@ -7,8 +7,9 @@ Uygulama genel ayarlarini (profil disinda kalan kucuk tercihler) saklar:
 
 import json
 import os
+from app_paths import get_app_data_dir
 
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_config.json")
+CONFIG_PATH = os.path.join(get_app_data_dir(), "app_config.json")
 
 DEFAULTS = {
     "update_manifest_url": "",

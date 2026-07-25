@@ -3,7 +3,7 @@ REM Bu dosyayi kendi Windows bilgisayaninda calistir (kaynak koddan, .exe icinde
 REM Once: pip install -r requirements.txt
 
 pyinstaller --onefile --noconsole --name LocalTrainerStudio ^
-    --add-data "profiles;profiles" ^
+    --uac-admin ^
     main.py
 
 echo.

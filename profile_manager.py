@@ -12,8 +12,9 @@ import os
 from typing import List, Optional
 
 from memory_engine import WatchedAddress
+from app_paths import get_app_data_dir
 
-PROFILES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "profiles")
+PROFILES_DIR = os.path.join(get_app_data_dir(), "profiles")
 
 
 def _profile_path(process_name: str) -> str:
