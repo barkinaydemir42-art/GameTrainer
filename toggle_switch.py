@@ -11,8 +11,11 @@ WeMod'daki gibi: kapaliyken gri/koyu gri, aciliken canli yesil, top
 sola/saga yumusak animasyonla kayar.
 """
 
-from PyQt5.QtWidgets import QAbstractButton, QSizePolicy
-from PyQt5.QtCore import Qt, QSize, QPropertyAnimation, QEasingCurve, pyqtProperty
+from PyQt5.QtWidgets import QAbstractButton, QSizePolicy, QGraphicsDropShadowEffect
+from PyQt5.QtCore import (
+    Qt, QSize, QPropertyAnimation, QEasingCurve, pyqtProperty,
+    QSequentialAnimationGroup,
+)
 from PyQt5.QtGui import QPainter, QColor, QPen
 
 
@@ -39,8 +42,45 @@ class ToggleSwitch(QAbstractButton):
         self._anim.setDuration(140)
         self._anim.setEasingCurve(QEasingCurve.InOutCubic)
 
+        # ---- Hover/glow efekti (WeMod tarzi) ----
+        # QGraphicsDropShadowEffect'i offset=(0,0) ile kullanmak, ozunde
+        # widget'in etrafina yumusak/bulanik bir "hale" (glow) cizer.
+        # blurRadius'u QPropertyAnimation ile 0'dan bir hedefe animasyonla
+        # artirip azaltarak, fareyle uzerine gelince/toggle acilinca
+        # yumusak bir parlama efekti elde ediyoruz.
+        self._glow = QGraphicsDropShadowEffect(self)
+        self._glow.setOffset(0, 0)
+        self._glow.setBlurRadius(0)
+        self._glow.setColor(self._glow_color(self._off_color))
+        self.setGraphicsEffect(self._glow)
+        self._hovered = False
+
+        self._hover_anim = QPropertyAnimation(self._glow, b"blurRadius", self)
+        self._hover_anim.setDuration(180)
+        self._hover_anim.setEasingCurve(QEasingCurve.OutCubic)
+
+        # Toggle acildiginda kisa bir "pulse" (parla-sonra-sonumle) - iki
+        # asamali oldugu icin QSequentialAnimationGroup kullanilir.
+        self._pulse_group = QSequentialAnimationGroup(self)
+        self._pulse_up = QPropertyAnimation(self._glow, b"blurRadius", self)
+        self._pulse_up.setDuration(120)
+        self._pulse_up.setEasingCurve(QEasingCurve.OutCubic)
+        self._pulse_down = QPropertyAnimation(self._glow, b"blurRadius", self)
+        self._pulse_down.setDuration(220)
+        self._pulse_down.setEasingCurve(QEasingCurve.InOutCubic)
+        self._pulse_group.addAnimation(self._pulse_up)
+        self._pulse_group.addAnimation(self._pulse_down)
+
         self.setFixedSize(self.sizeHint())
         self.toggled.connect(self._animate_to_state)
+        self.toggled.connect(self._animate_glow_toggle)
+
+    def _glow_color(self, base: QColor) -> QColor:
+        """Tam opak degil, yari saydam bir parlama rengi - aksi halde
+        QGraphicsDropShadowEffect kati/sert bir hale gibi gorunur."""
+        c = QColor(base)
+        c.setAlpha(190)
+        return c
 
     # --- offset Qt property (QPropertyAnimation bunun uzerinden calisir) ---
     def _get_offset(self):
@@ -58,6 +98,56 @@ class ToggleSwitch(QAbstractButton):
         self._anim.setEndValue(1.0 if checked else 0.0)
         self._anim.start()
 
+    def _hover_target_blur(self) -> float:
+        """Fareyle uzerine gelindiginde ulasilacak parlama (blur) miktari.
+        Acikken (yesil/checked) biraz daha guclu parlar, kapaliyken hafif."""
+        if not self.isEnabled():
+            return 0.0
+        return 20.0 if self.isChecked() else 10.0
+
+    def _start_hover_anim(self, target: float):
+        self._pulse_group.stop()
+        self._hover_anim.stop()
+        self._hover_anim.setStartValue(self._glow.blurRadius())
+        self._hover_anim.setEndValue(target)
+        self._hover_anim.start()
+
+    def enterEvent(self, event):
+        self._hovered = True
+        self._start_hover_anim(self._hover_target_blur())
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hovered = False
+        self._start_hover_anim(0.0)
+        super().leaveEvent(event)
+
+    def _animate_glow_toggle(self, checked: bool):
+        """Anahtar acilip kapandiginda parlama rengini gunceller ve -
+        sadece acilirken - kisa bir 'pulse' (parla-sonup-git) efekti
+        oynatir. WeMod'daki gibi acilis anini gorsel olarak vurgular."""
+        self._glow.setColor(self._glow_color(self._on_color if checked else self._off_color))
+        if not self.isEnabled():
+            return
+        settle_target = self._hover_target_blur() if self._hovered else 0.0
+        if checked:
+            self._hover_anim.stop()
+            self._pulse_group.stop()
+            self._pulse_up.setStartValue(self._glow.blurRadius())
+            self._pulse_up.setEndValue(28.0)
+            self._pulse_down.setStartValue(28.0)
+            self._pulse_down.setEndValue(settle_target)
+            self._pulse_group.start()
+        else:
+            self._start_hover_anim(settle_target)
+
+    def setEnabled(self, enabled: bool):
+        super().setEnabled(enabled)
+        if not enabled:
+            self._pulse_group.stop()
+            self._hover_anim.stop()
+            self._glow.setBlurRadius(0)
+
     def setChecked(self, checked: bool):
         # Programatik setChecked() cagrildiginda da (profil yuklerken,
         # tablo yeniden cizilirken vb.) animasyon dogru konuma gitsin -
@@ -73,6 +163,7 @@ class ToggleSwitch(QAbstractButton):
         self.setChecked(checked)
         self.blockSignals(False)
         self._offset = 1.0 if checked else 0.0
+        self._glow.setColor(self._glow_color(self._on_color if checked else self._off_color))
         self.update()
 
     def sizeHint(self):
