@@ -27,14 +27,14 @@ from PyQt5.QtWidgets import (
     QTextEdit, QStatusBar, QDockWidget,
     QMessageBox, QListWidget, QGroupBox, QSplitter, QStackedWidget,
     QFileDialog, QInputDialog, QCheckBox, QHeaderView, QListWidgetItem,
-    QProgressBar
+    QProgressBar, QButtonGroup, QFrame, QSizePolicy
 )
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
 
 from memory_engine import (
     MemoryEngine, WatchedAddress, list_processes, list_processes_with_windows, ALL_TYPES,
 )
-from profile_manager import save_profile, load_profile, profile_exists, PROFILES_DIR
+from profile_manager import save_profile, load_profile, profile_exists, list_profiles, PROFILES_DIR
 from hotkeys import HotkeyManager
 from script_engine import ScriptEngine, ScriptError
 from toggle_switch import ToggleSwitch
@@ -129,12 +129,21 @@ class LocalTrainerStudio(QMainWindow):
 
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
-        self.main_layout = QVBoxLayout(self.central_widget)
+        self.main_layout = QHBoxLayout(self.central_widget)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(0)
 
         self.game_tabs = QTabWidget()
-        self.main_layout.addWidget(self.game_tabs)
-
         self.add_game_tab("Bagli Degil")
+
+        self.pages = QStackedWidget()
+        self.dashboard_page = self.create_dashboard_tab()
+        self.pages.addWidget(self.dashboard_page)   # index 0
+        self.pages.addWidget(self.game_tabs)        # index 1
+
+        sidebar = self._build_sidebar()
+        self.main_layout.addWidget(sidebar)
+        self.main_layout.addWidget(self.pages, 1)
 
         self.init_log_dock()
         self.apply_theme()
@@ -203,11 +212,142 @@ class LocalTrainerStudio(QMainWindow):
         layout.addWidget(sub_tabs)
         self.game_tabs.addTab(tab_widget, title)
         self.game_tab_widget = tab_widget
+        self.sub_tabs = sub_tabs
 
     def _rename_game_tab(self, title: str):
         idx = self.game_tabs.indexOf(self.game_tab_widget)
         if idx >= 0:
             self.game_tabs.setTabText(idx, title)
+
+    # ------------------------------------------------------------------
+    # SOL MENU (SIDEBAR)
+    # ------------------------------------------------------------------
+    def _build_sidebar(self) -> QWidget:
+        sidebar = QFrame()
+        sidebar.setObjectName("Sidebar")
+        sidebar.setFixedWidth(190)
+        layout = QVBoxLayout(sidebar)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+
+        brand = QLabel("\u26A1 LocalTrainer")
+        brand.setObjectName("Brand")
+        brand.setAlignment(Qt.AlignCenter)
+        brand.setFixedHeight(56)
+        layout.addWidget(brand)
+
+        self.nav_group = QButtonGroup(self)
+        self.nav_group.setExclusive(True)
+
+        nav_items = [
+            ("\U0001F3E0  Ana Sayfa", 0),
+            ("\U0001F3AE  Trainer", 1),
+            ("\u2699\uFE0F  Ayarlar", 2),  # 2 = Trainer + Guncelleme sekmesine atla
+        ]
+        self.nav_buttons = []
+        for label, target in nav_items:
+            btn = QPushButton(label)
+            btn.setObjectName("NavButton")
+            btn.setCheckable(True)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.clicked.connect(lambda _, t=target: self._nav_clicked(t))
+            layout.addWidget(btn)
+            self.nav_group.addButton(btn)
+            self.nav_buttons.append(btn)
+
+        self.nav_buttons[0].setChecked(True)
+        layout.addStretch(1)
+
+        version_lbl = QLabel(f"v{updater.CURRENT_VERSION}")
+        version_lbl.setObjectName("VersionLabel")
+        version_lbl.setAlignment(Qt.AlignCenter)
+        layout.addWidget(version_lbl)
+
+        return sidebar
+
+    def _nav_clicked(self, target: int):
+        if target == 2:
+            # "Ayarlar" -> Trainer sayfasina gec ve Guncelleme sekmesini ac
+            self.pages.setCurrentWidget(self.game_tabs)
+            if hasattr(self, "sub_tabs"):
+                self.sub_tabs.setCurrentIndex(self.sub_tabs.count() - 1)
+        else:
+            self.pages.setCurrentIndex(target)
+        if target != 2:
+            self.nav_buttons[target].setChecked(True)
+
+    # ------------------------------------------------------------------
+    # DASHBOARD (ANA SAYFA)
+    # ------------------------------------------------------------------
+    def create_dashboard_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(30, 30, 30, 30)
+        layout.setSpacing(16)
+
+        title = QLabel("Ana Sayfa")
+        title.setObjectName("PageTitle")
+        layout.addWidget(title)
+
+        subtitle = QLabel("Bir oyuna baglanarak veya kayitli bir profil yukleyerek basla.")
+        subtitle.setObjectName("PageSubtitle")
+        layout.addWidget(subtitle)
+
+        # ---- Durum karti ----
+        status_card = QFrame()
+        status_card.setObjectName("Card")
+        status_layout = QVBoxLayout(status_card)
+        self.dash_status_label = QLabel("\U0001F534  Bagli degil")
+        self.dash_status_label.setObjectName("DashStatus")
+        status_layout.addWidget(self.dash_status_label)
+
+        btn_row = QHBoxLayout()
+        btn_go_wizard = QPushButton("\u2728  Trainer Wizard'i Ac")
+        btn_go_wizard.clicked.connect(lambda: self._nav_clicked(1))
+        btn_row.addWidget(btn_go_wizard)
+        btn_refresh_dash = QPushButton("Yenile")
+        btn_refresh_dash.clicked.connect(self._refresh_dashboard)
+        btn_row.addWidget(btn_refresh_dash)
+        btn_row.addStretch(1)
+        status_layout.addLayout(btn_row)
+        layout.addWidget(status_card)
+
+        # ---- Kayitli profiller karti ----
+        profiles_card = QFrame()
+        profiles_card.setObjectName("Card")
+        profiles_layout = QVBoxLayout(profiles_card)
+        profiles_header = QLabel("\U0001F4C1  Kayitli Profiller")
+        profiles_header.setObjectName("CardHeader")
+        profiles_layout.addWidget(profiles_header)
+
+        self.dash_profile_list = QListWidget()
+        self.dash_profile_list.setMaximumHeight(220)
+        profiles_layout.addWidget(self.dash_profile_list)
+        layout.addWidget(profiles_card)
+
+        layout.addStretch(1)
+        self._refresh_dashboard()
+        return widget
+
+    def _refresh_dashboard(self):
+        if hasattr(self, "engine") and self.engine.attached:
+            base_str = f"0x{self.engine.base_address:X}" if self.engine.base_address else "bulunamadi"
+            self.dash_status_label.setText(
+                f"\U0001F7E2  Bagli \u2192 {self.engine.process_name}  (base={base_str})"
+            )
+        elif hasattr(self, "dash_status_label"):
+            self.dash_status_label.setText("\U0001F534  Bagli degil")
+
+        if hasattr(self, "dash_profile_list"):
+            self.dash_profile_list.clear()
+            try:
+                names = sorted(list_profiles())
+            except Exception:
+                names = []
+            if not names:
+                self.dash_profile_list.addItem("(kayitli profil yok)")
+            else:
+                self.dash_profile_list.addItems(names)
 
     # ------------------------------------------------------------------
     # 1) TRAINER WIZARD
@@ -390,6 +530,8 @@ class LocalTrainerStudio(QMainWindow):
             )
         self._refresh_freeze_table()
         self._try_autoload_profile(process_name)
+        self._refresh_dashboard()
+        self._nav_clicked(1)
 
     def _detach(self):
         self.hotkeys.unregister_all()
@@ -402,6 +544,7 @@ class LocalTrainerStudio(QMainWindow):
         self._rename_game_tab("Bagli Degil")
         self.status_bar.showMessage("Baglanti kesildi.")
         self.log("Baglanti kesildi.")
+        self._refresh_dashboard()
 
     def _try_autoload_profile(self, process_name):
         if not profile_exists(process_name):
@@ -1593,45 +1736,81 @@ class LocalTrainerStudio(QMainWindow):
     def apply_theme(self):
         self.setStyleSheet("""
             QMainWindow, QWidget {
-                background-color: #1e1e1e;
-                color: #ffffff;
+                background-color: #14151a;
+                color: #e8e8ea;
                 font-family: 'Segoe UI';
                 font-size: 13px;
             }
-            QTabWidget::pane { border: 1px solid #333333; background-color: #252526; }
-            QTabBar::tab {
-                background-color: #2d2d2d; color: #b0b0b0; padding: 8px 16px;
-                margin-right: 2px; border-top-left-radius: 4px; border-top-right-radius: 4px;
+
+            /* ---- Sol menu (sidebar) ---- */
+            #Sidebar { background-color: #191a20; border-right: 1px solid #2a2b33; }
+            #Brand {
+                font-size: 15px; font-weight: bold; color: #ffffff;
+                background-color: #1f2027; border-bottom: 1px solid #2a2b33;
             }
-            QTabBar::tab:selected { background-color: #0d47a1; color: #ffffff; font-weight: bold; }
-            QTabBar::tab:hover { background-color: #383838; color: #ffffff; }
+            #NavButton {
+                text-align: left; background-color: transparent; color: #a7a8b3;
+                border: none; border-radius: 0px; padding: 12px 18px;
+                font-weight: 600; margin: 0px;
+            }
+            #NavButton:hover { background-color: #23242c; color: #ffffff; }
+            #NavButton:checked {
+                background-color: #23252f; color: #ffffff;
+                border-left: 3px solid #7c5cff;
+            }
+            #VersionLabel { color: #55565f; font-size: 11px; padding: 10px; }
+
+            /* ---- Dashboard ---- */
+            #PageTitle { font-size: 22px; font-weight: bold; color: #ffffff; }
+            #PageSubtitle { color: #9092a0; font-size: 13px; }
+            #Card {
+                background-color: #1c1d24; border: 1px solid #2a2b33;
+                border-radius: 10px; padding: 16px;
+            }
+            #CardHeader { font-size: 14px; font-weight: bold; color: #c8c9d6; }
+            #DashStatus { font-size: 15px; font-weight: 600; color: #ffffff; padding-bottom: 8px; }
+
+            /* ---- Sekmeler (tabs) ---- */
+            QTabWidget::pane { border: 1px solid #2a2b33; background-color: #1a1b21; border-radius: 6px; }
+            QTabBar::tab {
+                background-color: #1f2027; color: #9092a0; padding: 8px 18px;
+                margin-right: 3px; border-top-left-radius: 6px; border-top-right-radius: 6px;
+            }
+            QTabBar::tab:selected { background-color: #7c5cff; color: #ffffff; font-weight: bold; }
+            QTabBar::tab:hover { background-color: #2a2b33; color: #ffffff; }
+
             QTableWidget, QTextEdit, QListWidget {
-                background-color: #181818; color: #ffffff;
-                border: 1px solid #333333; gridline-color: #333333;
+                background-color: #16171d; color: #ffffff;
+                border: 1px solid #2a2b33; border-radius: 6px; gridline-color: #2a2b33;
             }
             QHeaderView::section {
-                background-color: #2d2d2d; color: #ffffff; padding: 5px;
-                border: 1px solid #333333; font-weight: bold;
+                background-color: #1f2027; color: #ffffff; padding: 6px;
+                border: 1px solid #2a2b33; font-weight: bold;
             }
             QPushButton {
-                background-color: #0d47a1; color: white; border-radius: 4px;
-                padding: 6px 14px; font-weight: bold; border: none;
+                background-color: #7c5cff; color: white; border-radius: 6px;
+                padding: 7px 16px; font-weight: 600; border: none;
             }
-            QPushButton:hover { background-color: #1565c0; }
-            QPushButton:pressed { background-color: #0b3c7d; }
+            QPushButton:hover { background-color: #9177ff; }
+            QPushButton:pressed { background-color: #6748e0; }
             QLineEdit, QComboBox {
-                background-color: #2d2d2d; border: 1px solid #555555;
-                padding: 5px; color: white; border-radius: 3px;
+                background-color: #1f2027; border: 1px solid #34353f;
+                padding: 6px; color: white; border-radius: 5px;
             }
-            QLineEdit:focus, QComboBox:focus { border: 1px solid #0d47a1; }
+            QLineEdit:focus, QComboBox:focus { border: 1px solid #7c5cff; }
             QGroupBox {
-                border: 1px solid #444444; margin-top: 15px; font-weight: bold;
-                color: #90caf9; border-radius: 4px; padding-top: 10px;
+                border: 1px solid #2a2b33; margin-top: 15px; font-weight: bold;
+                color: #a794ff; border-radius: 6px; padding-top: 10px;
             }
             QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }
-            QListWidget::item { padding: 6px; }
-            QListWidget::item:selected { background-color: #0d47a1; color: white; }
-            QStatusBar { background-color: #007acc; color: white; font-weight: bold; }
+            QListWidget::item { padding: 6px; border-radius: 4px; }
+            QListWidget::item:selected { background-color: #7c5cff; color: white; }
+            QStatusBar { background-color: #7c5cff; color: white; font-weight: bold; }
+            QProgressBar {
+                background-color: #1f2027; border: 1px solid #2a2b33;
+                border-radius: 5px; text-align: center; color: white;
+            }
+            QProgressBar::chunk { background-color: #7c5cff; border-radius: 5px; }
         """)
 
     def closeEvent(self, event):
