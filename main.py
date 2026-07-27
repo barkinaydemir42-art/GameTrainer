@@ -27,7 +27,7 @@ from PyQt5.QtWidgets import (
     QTextEdit, QStatusBar, QDockWidget,
     QMessageBox, QListWidget, QGroupBox, QSplitter, QStackedWidget,
     QFileDialog, QInputDialog, QCheckBox, QHeaderView, QListWidgetItem,
-    QProgressBar, QButtonGroup, QFrame, QSizePolicy
+    QProgressBar, QButtonGroup, QFrame, QSizePolicy, QAbstractItemView
 )
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
 
@@ -770,10 +770,23 @@ class LocalTrainerStudio(QMainWindow):
         self.scan_result_table.setHorizontalHeaderLabels(["Adres", "Deger"])
         self.scan_result_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.scan_result_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.scan_result_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.scan_result_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.scan_result_table.itemDoubleClicked.connect(self._add_scan_result_to_watchlist)
         scan_v.addWidget(self.scan_result_table)
+        result_btn_row = QHBoxLayout()
         self.scan_result_label = QLabel("Sonuc: 0")
-        scan_v.addWidget(self.scan_result_label)
+        result_btn_row.addWidget(self.scan_result_label)
+        result_btn_row.addStretch()
+        btn_bulk_add = QPushButton("Secilenleri Toplu Ekle (Ctrl/Shift ile coklu sec)")
+        btn_bulk_add.setToolTip(
+            "Tabloda birden fazla satiri Ctrl+tik veya Shift+tik ile secip\n"
+            "buna bas: hepsi tek seferde, tek isim sorusuyla Freeze Manager'a\n"
+            "eklenir (her biri icin ayri ayri isim sormaz)."
+        )
+        btn_bulk_add.clicked.connect(self._add_selected_scan_results_to_watchlist)
+        result_btn_row.addWidget(btn_bulk_add)
+        scan_v.addLayout(result_btn_row)
 
         # ---- AOB / Pattern tarama ----
         aob_box = QGroupBox("Auto Signature (AOB) Builder")
@@ -788,12 +801,17 @@ class LocalTrainerStudio(QMainWindow):
         aob_layout.addLayout(row1)
 
         self.aob_result_list = QListWidget()
+        self.aob_result_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.aob_result_list.itemDoubleClicked.connect(self._add_aob_result_to_watchlist)
         aob_layout.addWidget(self.aob_result_list)
         aob_layout.addWidget(QLabel(
             "Not: '??' bilinmeyen/degisken byte anlamina gelir. Cift tiklayarak\n"
-            "bulunan adresi Freeze Manager listesine ekleyebilirsin."
+            "tek bir adresi, ya da Ctrl/Shift ile birden fazla secip asagidaki\n"
+            "butonla hepsini tek seferde Freeze Manager listesine ekleyebilirsin."
         ))
+        btn_aob_bulk_add = QPushButton("Secilenleri Toplu Ekle")
+        btn_aob_bulk_add.clicked.connect(self._add_selected_aob_results_to_watchlist)
+        aob_layout.addWidget(btn_aob_bulk_add)
 
         splitter.addWidget(scan_box)
         splitter.addWidget(aob_box)
@@ -899,6 +917,59 @@ class LocalTrainerStudio(QMainWindow):
         self._refresh_freeze_table()
         self.log(f"'{name}' Freeze Manager'a eklendi.")
 
+    def _add_selected_scan_results_to_watchlist(self):
+        """Tabloda secili birden fazla satiri TEK bir isim sorusuyla topluca
+        Freeze Manager'a ekler (her satir icin ayri ayri dialog acmaz).
+        Isimler 'Taban Isim 1', 'Taban Isim 2' ... seklinde numaralanir."""
+        rows = sorted({idx.row() for idx in self.scan_result_table.selectedIndexes()})
+        if not rows:
+            QMessageBox.information(self, "Bilgi", "Once tabloda bir veya daha fazla satir sec (Ctrl/Shift ile).")
+            return
+        base_name, ok = QInputDialog.getText(
+            self, "Toplu Isim", f"{len(rows)} adres icin taban isim (ornek: 'Can'):"
+        )
+        if not ok or not base_name:
+            return
+        vtype = self.scan_type_combo.currentText()
+        added = 0
+        for i, row in enumerate(rows):
+            item = self.scan_result_table.item(row, 0)
+            if item is None:
+                continue
+            address = int(item.text(), 16)
+            name = base_name if len(rows) == 1 else f"{base_name} {i + 1}"
+            self.watched.append(WatchedAddress(name=name, address=address, value_type=vtype))
+            added += 1
+        self._refresh_freeze_table()
+        self.log(f"{added} adres '{base_name}' adiyla topluca Freeze Manager'a eklendi.")
+
+    def _add_selected_aob_results_to_watchlist(self):
+        """AOB sonuc listesindeki secili birden fazla adresi TEK bir isim ve
+        tip sorusuyla topluca Freeze Manager'a ekler."""
+        items = self.aob_result_list.selectedItems()
+        if not items:
+            QMessageBox.information(self, "Bilgi", "Once listede bir veya daha fazla sonuc sec (Ctrl/Shift ile).")
+            return
+        base_name, ok = QInputDialog.getText(
+            self, "Toplu Isim", f"{len(items)} adres icin taban isim:"
+        )
+        if not ok or not base_name:
+            return
+        vtype, ok2 = QInputDialog.getItem(
+            self, "Deger tipi", "Bu adresler icin deger tipi:",
+            ALL_TYPES, editable=False,
+        )
+        if not ok2:
+            vtype = "int32"
+        added = 0
+        for i, item in enumerate(items):
+            address = int(item.text(), 16)
+            name = base_name if len(items) == 1 else f"{base_name} {i + 1}"
+            self.watched.append(WatchedAddress(name=name, address=address, value_type=vtype))
+            added += 1
+        self._refresh_freeze_table()
+        self.log(f"{added} adres (AOB) '{base_name}' adiyla topluca Freeze Manager'a eklendi.")
+
     def _aob_scan(self):
         if not self._require_attached():
             return
@@ -955,6 +1026,14 @@ class LocalTrainerStudio(QMainWindow):
         btn_hotkey = QPushButton("Sec: Hotkey Ata")
         btn_hotkey.clicked.connect(self._assign_hotkey_selected)
         btn_row.addWidget(btn_hotkey)
+        btn_group_hotkey = QPushButton("Coklu Sec: Ortak Hotkey (Grup Toggle)")
+        btn_group_hotkey.setToolTip(
+            "Ctrl/Shift ile birden fazla cheat sec, sonra buna bas:\n"
+            "hepsine AYNI tus atanir, tek tusla hepsi birlikte ac/kapa olur\n"
+            "(WeMod/Wand'daki profil bazli toplu hotkey davranisi)."
+        )
+        btn_group_hotkey.clicked.connect(self._assign_group_hotkey_selected)
+        btn_row.addWidget(btn_group_hotkey)
         self.btn_pointer_scan = btn_pointer_scan = QPushButton("Sec: Pointer Zinciri Bul (Kalici Yap)")
         btn_pointer_scan.setToolTip(
             "Secili cheat'in ham adresi icin, oyun yeniden baslasa da gecerli\n"
@@ -993,6 +1072,8 @@ class LocalTrainerStudio(QMainWindow):
             "Enter'a basabilirsin - ayri bir pencere acmana gerek yok."
         )
         self.freeze_table.itemChanged.connect(self._on_freeze_item_changed)
+        self.freeze_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.freeze_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         layout.addWidget(self.freeze_table)
         return widget
 
@@ -1083,12 +1164,42 @@ class LocalTrainerStudio(QMainWindow):
         if not ok or not hk:
             return
         if wa.hotkey:
-            # Eski hotkey'i kayittan sil, aksi halde eski tus hala bu
-            # nesneyi tetiklemeye devam eder (hayalet binding).
-            self.hotkeys.unregister(wa.hotkey)
+            # Eski hotkey'i sadece BU cheat icin kayittan sil (owner_id ile) -
+            # ayni tusu paylasan baska bir cheat varsa onu etkilemez.
+            self.hotkeys.unregister(wa.hotkey, owner_id=id(wa))
         wa.hotkey = hk.strip()
         self._bind_hotkey(wa)
         self._refresh_freeze_table()
+
+    def _assign_group_hotkey_selected(self):
+        """Secili BIRDEN FAZLA cheat'e AYNI hotkey'i atar (WeMod/Wand'daki
+        gibi tek tusla bir grup cheat'i topluca ac/kapa). Her cheat kendi
+        frozen durumunu ayri ayri tutar, ama hepsi ayni tus basisinda
+        birlikte tetiklenir."""
+        rows = sorted({idx.row() for idx in self.freeze_table.selectedIndexes()})
+        rows = [r for r in rows if 0 <= r < len(self.watched)]
+        if len(rows) < 2:
+            QMessageBox.information(
+                self, "Bilgi",
+                "Bu, birden fazla cheat'e AYNI tusu atamak icindir - "
+                "Ctrl/Shift ile en az 2 satir sec."
+            )
+            return
+        hk, ok = QInputDialog.getText(
+            self, "Grup Hotkey",
+            f"{len(rows)} cheat icin ortak tus kombinasyonu (ornek: f1, ctrl+f2):"
+        )
+        if not ok or not hk:
+            return
+        hk = hk.strip()
+        for r in rows:
+            wa = self.watched[r]
+            if wa.hotkey:
+                self.hotkeys.unregister(wa.hotkey, owner_id=id(wa))
+            wa.hotkey = hk
+            self._bind_hotkey(wa)
+        self._refresh_freeze_table()
+        self.log(f"{len(rows)} cheat'e ortak grup hotkey ({hk}) atandi - tek tusla hepsi birlikte ac/kapa olacak.")
 
     def _find_pointer_chain_for_selected(self):
         idx = self._selected_watched_index()
@@ -1190,7 +1301,7 @@ class LocalTrainerStudio(QMainWindow):
             self.log(f"Hotkey ({wa.hotkey}): {wa.name} -> {'DONDU' if wa.frozen else 'cozuldu'}")
 
         try:
-            self.hotkeys.register(wa.hotkey, callback)
+            self.hotkeys.register(wa.hotkey, callback, owner_id=id(wa))
         except Exception as e:
             QMessageBox.warning(self, "Uyari", f"Hotkey atanamadi ({wa.hotkey}):\n{e}")
 
@@ -1200,7 +1311,7 @@ class LocalTrainerStudio(QMainWindow):
             return
         wa = self.watched[idx]
         if wa.hotkey:
-            self.hotkeys.unregister(wa.hotkey)
+            self.hotkeys.unregister(wa.hotkey, owner_id=id(wa))
         del self.watched[idx]
         self._refresh_freeze_table()
 
