@@ -39,6 +39,7 @@ from hotkeys import HotkeyManager
 from script_engine import ScriptEngine, ScriptError
 from toggle_switch import ToggleSwitch
 from icons import get_icon, get_pixmap
+from game_library import scan_all_libraries
 import updater
 import config_manager
 import themes
@@ -145,6 +146,8 @@ class LocalTrainerStudio(QMainWindow):
         self.dashboard_page = self.create_dashboard_tab()
         self.pages.addWidget(self.dashboard_page)   # index 0
         self.pages.addWidget(self.game_tabs)        # index 1
+        self.library_page = self.create_library_tab()
+        self.pages.addWidget(self.library_page)     # index 2
 
         sidebar = self._build_sidebar()
         self.main_layout.addWidget(sidebar)
@@ -259,12 +262,14 @@ class LocalTrainerStudio(QMainWindow):
         self.nav_group.setExclusive(True)
 
         nav_items = [
-            ("home", "Ana Sayfa", 0),
-            ("gamepad", "Trainer", 1),
-            ("settings", "Ayarlar", 2),  # 2 = Trainer + Guncelleme sekmesine atla
+            ("home", "Ana Sayfa", "dashboard"),
+            ("gamepad", "Trainer", "trainer"),
+            ("grid", "Oyun Kutuphanesi", "library"),
+            ("settings", "Ayarlar", "settings"),
         ]
         self.nav_buttons = []
-        for icon_name, label, target in nav_items:
+        self._nav_key_to_button = {}
+        for icon_name, label, key in nav_items:
             btn = QPushButton(f"  {label}")
             btn.setObjectName("NavButton")
             btn.setCheckable(True)
@@ -273,10 +278,11 @@ class LocalTrainerStudio(QMainWindow):
             if not icon.isNull():
                 btn.setIcon(icon)
                 btn.setIconSize(QSize(18, 18))
-            btn.clicked.connect(lambda _, t=target: self._nav_clicked(t))
+            btn.clicked.connect(lambda _, k=key: self._nav_clicked(k))
             layout.addWidget(btn)
             self.nav_group.addButton(btn)
             self.nav_buttons.append(btn)
+            self._nav_key_to_button[key] = btn
 
         self.nav_buttons[0].setChecked(True)
         layout.addStretch(1)
@@ -288,16 +294,21 @@ class LocalTrainerStudio(QMainWindow):
 
         return sidebar
 
-    def _nav_clicked(self, target: int):
-        if target == 2:
+    def _nav_clicked(self, key: str):
+        if key == "dashboard":
+            self.pages.setCurrentIndex(0)
+        elif key == "trainer":
+            self.pages.setCurrentIndex(1)
+        elif key == "library":
+            self.pages.setCurrentIndex(2)
+        elif key == "settings":
             # "Ayarlar" -> Trainer sayfasina gec ve Guncelleme sekmesini ac
             self.pages.setCurrentWidget(self.game_tabs)
             if hasattr(self, "sub_tabs"):
                 self.sub_tabs.setCurrentIndex(self.sub_tabs.count() - 1)
-        else:
-            self.pages.setCurrentIndex(target)
-        if target != 2:
-            self.nav_buttons[target].setChecked(True)
+        btn = self._nav_key_to_button.get(key)
+        if btn is not None:
+            btn.setChecked(True)
 
     # ------------------------------------------------------------------
     # DASHBOARD (ANA SAYFA)
@@ -335,7 +346,7 @@ class LocalTrainerStudio(QMainWindow):
         if not sparkle_icon.isNull():
             btn_go_wizard.setIcon(sparkle_icon)
             btn_go_wizard.setIconSize(QSize(16, 16))
-        btn_go_wizard.clicked.connect(lambda: self._nav_clicked(1))
+        btn_go_wizard.clicked.connect(lambda: self._nav_clicked("trainer"))
         btn_row.addWidget(btn_go_wizard)
         btn_refresh_dash = QPushButton("  Yenile")
         refresh_icon = get_icon("refresh", color="#ffffff", size=16)
@@ -401,6 +412,123 @@ class LocalTrainerStudio(QMainWindow):
                 self.dash_profile_list.addItem("(kayitli profil yok)")
             else:
                 self.dash_profile_list.addItems(names)
+
+    # ------------------------------------------------------------------
+    # OYUN KUTUPHANESI (Steam/Epic/GOG/Xbox otomatik algilama)
+    # ------------------------------------------------------------------
+    def create_library_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(30, 30, 30, 30)
+        layout.setSpacing(16)
+
+        title = QLabel("Oyun Kutuphanesi")
+        title.setObjectName("PageTitle")
+        layout.addWidget(title)
+
+        subtitle = QLabel(
+            "Steam, Epic Games, GOG ve Xbox (Microsoft Store) uzerinden kurulu "
+            "oyunlari otomatik bulur. Sadece Windows'ta calisir."
+        )
+        subtitle.setObjectName("PageSubtitle")
+        subtitle.setWordWrap(True)
+        layout.addWidget(subtitle)
+
+        card = QFrame()
+        card.setObjectName("Card")
+        card_layout = QVBoxLayout(card)
+
+        toolbar = QHBoxLayout()
+        self.btn_scan_library = QPushButton("  Kutuphaneyi Tara")
+        refresh_icon = get_icon("refresh", color="#ffffff", size=16)
+        if not refresh_icon.isNull():
+            self.btn_scan_library.setIcon(refresh_icon)
+            self.btn_scan_library.setIconSize(QSize(16, 16))
+        self.btn_scan_library.clicked.connect(self._scan_library)
+        toolbar.addWidget(self.btn_scan_library)
+
+        self.library_status_label = QLabel("Henuz taranmadi.")
+        self.library_status_label.setObjectName("PageSubtitle")
+        toolbar.addWidget(self.library_status_label)
+        toolbar.addStretch(1)
+        card_layout.addLayout(toolbar)
+
+        self.library_table = QTableWidget(0, 3)
+        self.library_table.setHorizontalHeaderLabels(["Kaynak", "Oyun Adi", "Process (.exe)"])
+        self.library_table.horizontalHeader().setStretchLastSection(True)
+        self.library_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.library_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.library_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.library_table.itemDoubleClicked.connect(self._on_library_row_activated)
+        card_layout.addWidget(self.library_table)
+
+        hint = QLabel(
+            "Cift tikla: Trainer Wizard'a gonderir ve process adini doldurur. "
+            "Attach islemi icin oyunun ACIK/CALISIYOR olmasi gerekir."
+        )
+        hint.setObjectName("PageSubtitle")
+        hint.setWordWrap(True)
+        card_layout.addWidget(hint)
+
+        layout.addWidget(card, 1)
+        return widget
+
+    def _scan_library(self):
+        self.btn_scan_library.setEnabled(False)
+        self.library_status_label.setText("Taraniyor... (Steam / Epic / GOG / Xbox)")
+        worker = ScanWorker(scan_all_libraries)
+        worker.finished_ok.connect(self._on_library_scan_done)
+        worker.finished_error.connect(self._on_library_scan_error)
+        self._library_worker = worker  # tarama bitene kadar referansi tut (gc onlemi)
+        worker.start()
+
+    def _on_library_scan_done(self, games):
+        self.btn_scan_library.setEnabled(True)
+        self._populate_library_table(games)
+        self.log(f"Oyun kutuphanesi tarandi: {len(games)} oyun bulundu.")
+
+    def _on_library_scan_error(self, msg: str):
+        self.btn_scan_library.setEnabled(True)
+        self.library_status_label.setText("Tarama hatasi.")
+        self.log(f"Kutuphane tarama hatasi: {msg}")
+
+    def _populate_library_table(self, games):
+        self._library_games = games
+        self.library_table.setRowCount(len(games))
+        for row, g in enumerate(games):
+            self.library_table.setItem(row, 0, QTableWidgetItem(g.source))
+            self.library_table.setItem(row, 1, QTableWidgetItem(g.name))
+            self.library_table.setItem(row, 2, QTableWidgetItem(g.process_name or "(bulunamadi - elle .exe sec)"))
+        if games:
+            self.library_status_label.setText(f"{len(games)} oyun bulundu.")
+        else:
+            self.library_status_label.setText(
+                "Oyun bulunamadi. (Bu ozellik sadece Windows'ta ve Steam/Epic/GOG/Xbox "
+                "kuruluysa calisir.)"
+            )
+
+    def _on_library_row_activated(self, item: QTableWidgetItem):
+        games = getattr(self, "_library_games", [])
+        row = item.row()
+        if row < 0 or row >= len(games):
+            return
+        game = games[row]
+        proc_name = game.process_name
+        if not proc_name:
+            QMessageBox.information(
+                self, "Bilgi",
+                f"'{game.name}' icin calistirilabilir dosya otomatik bulunamadi.\n"
+                "Trainer Wizard'da '.exe Sec' ile elle secebilirsin."
+            )
+            return
+        self.wiz_process_combo.setEditText(proc_name)
+        self._nav_clicked("trainer")
+        if hasattr(self, "sub_tabs"):
+            self.sub_tabs.setCurrentIndex(0)
+        self.log(
+            f"Kutuphaneden secildi: {game.name} ({game.source}) -> {proc_name}. "
+            "Oyun acik degilse once ac, sonra Attach'e bas."
+        )
 
     # ------------------------------------------------------------------
     # 1) TRAINER WIZARD
@@ -584,7 +712,7 @@ class LocalTrainerStudio(QMainWindow):
         self._refresh_freeze_table()
         self._try_autoload_profile(process_name)
         self._refresh_dashboard()
-        self._nav_clicked(1)
+        self._nav_clicked("trainer")
 
     def _detach(self):
         self.hotkeys.unregister_all()

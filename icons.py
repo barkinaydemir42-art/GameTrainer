@@ -61,6 +61,12 @@ _STROKE_ICONS = {
         <polyline points="18 3 18 7 14 7" />
         <polyline points="6 21 6 17 10 17" />
     """,
+    "grid": """
+        <rect x="3" y="3" width="8" height="8" rx="1.5" />
+        <rect x="13" y="3" width="8" height="8" rx="1.5" />
+        <rect x="3" y="13" width="8" height="8" rx="1.5" />
+        <rect x="13" y="13" width="8" height="8" rx="1.5" />
+    """,
 }
 
 # Dolu (fill) ikonlar - tek parca sekil.
