@@ -41,6 +41,7 @@ from toggle_switch import ToggleSwitch
 from icons import get_icon, get_pixmap
 import updater
 import config_manager
+import themes
 from app_paths import get_app_data_dir
 
 REFRESH_MS = 500
@@ -125,6 +126,9 @@ class LocalTrainerStudio(QMainWindow):
 
         # ---- Guncelleme durumu ----
         self.app_config = config_manager.load_config()
+        self.current_theme = self.app_config.get("theme", themes.DEFAULT_THEME)
+        if self.current_theme not in themes.THEMES:
+            self.current_theme = themes.DEFAULT_THEME
         self.pending_update = None
         self.update_worker = None
 
@@ -1737,6 +1741,22 @@ class LocalTrainerStudio(QMainWindow):
         widget = QWidget()
         layout = QVBoxLayout(widget)
 
+        appearance_box = QGroupBox("Gorunum")
+        appearance_v = QHBoxLayout(appearance_box)
+        appearance_v.addWidget(QLabel("Tema:"))
+        self.theme_combo = QComboBox()
+        self._theme_keys = list(themes.THEMES.keys())
+        for key in self._theme_keys:
+            self.theme_combo.addItem(themes.THEME_LABELS.get(key, key))
+        if self.current_theme in self._theme_keys:
+            self.theme_combo.setCurrentIndex(self._theme_keys.index(self.current_theme))
+        self.theme_combo.currentIndexChanged.connect(
+            lambda i: self._change_theme(self._theme_keys[i])
+        )
+        appearance_v.addWidget(self.theme_combo)
+        appearance_v.addStretch(1)
+        layout.addWidget(appearance_box)
+
         info_box = QGroupBox("Surum Bilgisi")
         info_v = QVBoxLayout(info_box)
         info_v.addWidget(QLabel(f"Mevcut surum: {updater.CURRENT_VERSION}"))
@@ -1946,85 +1966,19 @@ class LocalTrainerStudio(QMainWindow):
         self._update_freeze_values_only()
 
     # ------------------------------------------------------------------
-    def apply_theme(self):
-        self.setStyleSheet("""
-            QMainWindow, QWidget {
-                background-color: #14151a;
-                color: #e8e8ea;
-                font-family: 'Segoe UI';
-                font-size: 13px;
-            }
+    def apply_theme(self, theme_key: str = None):
+        """Secilen temanin paletiyle stylesheet'i uretip uygular. theme_key
+        verilmezse mevcut self.current_theme kullanilir (baslangicta
+        config'ten yuklenen ya da en son secilen tema)."""
+        if theme_key is not None:
+            self.current_theme = theme_key
+        self.setStyleSheet(themes.build_stylesheet(self.current_theme))
 
-            /* ---- Sol menu (sidebar) ---- */
-            #Sidebar { background-color: #191a20; border-right: 1px solid #2a2b33; }
-            #Brand {
-                font-size: 15px; font-weight: bold; color: #ffffff;
-                background-color: #1f2027; border-bottom: 1px solid #2a2b33;
-            }
-            #NavButton {
-                text-align: left; background-color: transparent; color: #a7a8b3;
-                border: none; border-radius: 0px; padding: 12px 18px;
-                font-weight: 600; margin: 0px;
-            }
-            #NavButton:hover { background-color: #23242c; color: #ffffff; }
-            #NavButton:checked {
-                background-color: #23252f; color: #ffffff;
-                border-left: 3px solid #7c5cff;
-            }
-            #VersionLabel { color: #55565f; font-size: 11px; padding: 10px; }
-
-            /* ---- Dashboard ---- */
-            #PageTitle { font-size: 22px; font-weight: bold; color: #ffffff; }
-            #PageSubtitle { color: #9092a0; font-size: 13px; }
-            #Card {
-                background-color: #1c1d24; border: 1px solid #2a2b33;
-                border-radius: 10px; padding: 16px;
-            }
-            #CardHeader { font-size: 14px; font-weight: bold; color: #c8c9d6; }
-            #DashStatus { font-size: 15px; font-weight: 600; color: #ffffff; padding-bottom: 8px; }
-
-            /* ---- Sekmeler (tabs) ---- */
-            QTabWidget::pane { border: 1px solid #2a2b33; background-color: #1a1b21; border-radius: 6px; }
-            QTabBar::tab {
-                background-color: #1f2027; color: #9092a0; padding: 8px 18px;
-                margin-right: 3px; border-top-left-radius: 6px; border-top-right-radius: 6px;
-            }
-            QTabBar::tab:selected { background-color: #7c5cff; color: #ffffff; font-weight: bold; }
-            QTabBar::tab:hover { background-color: #2a2b33; color: #ffffff; }
-
-            QTableWidget, QTextEdit, QListWidget {
-                background-color: #16171d; color: #ffffff;
-                border: 1px solid #2a2b33; border-radius: 6px; gridline-color: #2a2b33;
-            }
-            QHeaderView::section {
-                background-color: #1f2027; color: #ffffff; padding: 6px;
-                border: 1px solid #2a2b33; font-weight: bold;
-            }
-            QPushButton {
-                background-color: #7c5cff; color: white; border-radius: 6px;
-                padding: 7px 16px; font-weight: 600; border: none;
-            }
-            QPushButton:hover { background-color: #9177ff; }
-            QPushButton:pressed { background-color: #6748e0; }
-            QLineEdit, QComboBox {
-                background-color: #1f2027; border: 1px solid #34353f;
-                padding: 6px; color: white; border-radius: 5px;
-            }
-            QLineEdit:focus, QComboBox:focus { border: 1px solid #7c5cff; }
-            QGroupBox {
-                border: 1px solid #2a2b33; margin-top: 15px; font-weight: bold;
-                color: #a794ff; border-radius: 6px; padding-top: 10px;
-            }
-            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }
-            QListWidget::item { padding: 6px; border-radius: 4px; }
-            QListWidget::item:selected { background-color: #7c5cff; color: white; }
-            QStatusBar { background-color: #7c5cff; color: white; font-weight: bold; }
-            QProgressBar {
-                background-color: #1f2027; border: 1px solid #2a2b33;
-                border-radius: 5px; text-align: center; color: white;
-            }
-            QProgressBar::chunk { background-color: #7c5cff; border-radius: 5px; }
-        """)
+    def _change_theme(self, theme_key: str):
+        self.apply_theme(theme_key)
+        self.app_config["theme"] = theme_key
+        config_manager.save_config(self.app_config)
+        self.log(f"Tema degistirildi: {themes.THEME_LABELS.get(theme_key, theme_key)}")
 
     def closeEvent(self, event):
         self.hotkeys.unregister_all()

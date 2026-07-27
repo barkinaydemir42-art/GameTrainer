@@ -14,6 +14,7 @@ CONFIG_PATH = os.path.join(get_app_data_dir(), "app_config.json")
 DEFAULTS = {
     "update_manifest_url": "",
     "auto_check_updates": True,
+    "theme": "dark",
 }
 
 
