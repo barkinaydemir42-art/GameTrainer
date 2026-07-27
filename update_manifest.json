@@ -4,5 +4,5 @@
   "download_url": "https://github.com/barkinaydemir42-art/GameTrainer/releases/download/v1.2.0/LocalTrainerStudio-Setup.exe",
   "sha256": "119556533c12b8a4ebf54d4397afd14cc6e7ba0fba5b25dde1a9d2805fd7108d",
   "installer": true,
-  "silent_args": "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS"
+  "silent_args": "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS"
 }

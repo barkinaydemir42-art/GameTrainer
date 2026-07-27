@@ -69,7 +69,13 @@ Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+; NOT: "skipifsilent" bilerek KALDIRILDI. Bu bayrak varken, /VERYSILENT
+; ile calisan (yani otomatik guncelleme sirasinda kullanilan) kurulumlarda
+; bu satir hic calismiyordu - kurulum sessizce bitiyor ama uygulama tekrar
+; acilmiyordu. skipifsilent olmadan bu satir HEM interaktif kurulumda HEM
+; sessiz/otomatik guncellemede calisir, yani "Simdi Guncelle" sonrasi
+; uygulama otomatik olarak yeniden acilir.
+Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall
 
 [UninstallDelete]
 ; Kullanicinin kendi profillerini/loglarini kaldirirken SILME - sadece
