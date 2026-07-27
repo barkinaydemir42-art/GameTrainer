@@ -29,7 +29,7 @@ from PyQt5.QtWidgets import (
     QFileDialog, QInputDialog, QCheckBox, QHeaderView, QListWidgetItem,
     QProgressBar, QButtonGroup, QFrame, QSizePolicy, QAbstractItemView
 )
-from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize
 
 from memory_engine import (
     MemoryEngine, WatchedAddress, list_processes, list_processes_with_windows, ALL_TYPES,
@@ -38,6 +38,7 @@ from profile_manager import save_profile, load_profile, profile_exists, list_pro
 from hotkeys import HotkeyManager
 from script_engine import ScriptEngine, ScriptError
 from toggle_switch import ToggleSwitch
+from icons import get_icon, get_pixmap
 import updater
 import config_manager
 from app_paths import get_app_data_dir
@@ -230,26 +231,44 @@ class LocalTrainerStudio(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
 
-        brand = QLabel("\u26A1 LocalTrainer")
+        brand = QWidget()
         brand.setObjectName("Brand")
-        brand.setAlignment(Qt.AlignCenter)
         brand.setFixedHeight(56)
+        brand_layout = QHBoxLayout(brand)
+        brand_layout.setContentsMargins(0, 0, 0, 0)
+        brand_layout.setSpacing(8)
+        brand_layout.addStretch(1)
+        brand_icon = QLabel()
+        bolt_pix = get_pixmap("bolt", color="#7c5cff", size=20)
+        if bolt_pix is not None:
+            brand_icon.setPixmap(bolt_pix)
+        else:
+            brand_icon.setText("\u26A1")  # QtSvg yoksa emoji'ye sessizce geri don
+        brand_layout.addWidget(brand_icon)
+        brand_text = QLabel("LocalTrainer")
+        brand_text.setStyleSheet("font-size: 15px; font-weight: bold; color: #ffffff;")
+        brand_layout.addWidget(brand_text)
+        brand_layout.addStretch(1)
         layout.addWidget(brand)
 
         self.nav_group = QButtonGroup(self)
         self.nav_group.setExclusive(True)
 
         nav_items = [
-            ("\U0001F3E0  Ana Sayfa", 0),
-            ("\U0001F3AE  Trainer", 1),
-            ("\u2699\uFE0F  Ayarlar", 2),  # 2 = Trainer + Guncelleme sekmesine atla
+            ("home", "Ana Sayfa", 0),
+            ("gamepad", "Trainer", 1),
+            ("settings", "Ayarlar", 2),  # 2 = Trainer + Guncelleme sekmesine atla
         ]
         self.nav_buttons = []
-        for label, target in nav_items:
-            btn = QPushButton(label)
+        for icon_name, label, target in nav_items:
+            btn = QPushButton(f"  {label}")
             btn.setObjectName("NavButton")
             btn.setCheckable(True)
             btn.setCursor(Qt.PointingHandCursor)
+            icon = get_icon(icon_name, color="#a7a8b3", size=18)
+            if not icon.isNull():
+                btn.setIcon(icon)
+                btn.setIconSize(QSize(18, 18))
             btn.clicked.connect(lambda _, t=target: self._nav_clicked(t))
             layout.addWidget(btn)
             self.nav_group.addButton(btn)
@@ -297,15 +316,28 @@ class LocalTrainerStudio(QMainWindow):
         status_card = QFrame()
         status_card.setObjectName("Card")
         status_layout = QVBoxLayout(status_card)
-        self.dash_status_label = QLabel("\U0001F534  Bagli degil")
+        status_row = QHBoxLayout()
+        self.dash_status_icon = QLabel()
+        status_row.addWidget(self.dash_status_icon)
+        self.dash_status_label = QLabel("Bagli degil")
         self.dash_status_label.setObjectName("DashStatus")
-        status_layout.addWidget(self.dash_status_label)
+        status_row.addWidget(self.dash_status_label)
+        status_row.addStretch(1)
+        status_layout.addLayout(status_row)
 
         btn_row = QHBoxLayout()
-        btn_go_wizard = QPushButton("\u2728  Trainer Wizard'i Ac")
+        btn_go_wizard = QPushButton("  Trainer Wizard'i Ac")
+        sparkle_icon = get_icon("sparkle", color="#ffffff", size=16)
+        if not sparkle_icon.isNull():
+            btn_go_wizard.setIcon(sparkle_icon)
+            btn_go_wizard.setIconSize(QSize(16, 16))
         btn_go_wizard.clicked.connect(lambda: self._nav_clicked(1))
         btn_row.addWidget(btn_go_wizard)
-        btn_refresh_dash = QPushButton("Yenile")
+        btn_refresh_dash = QPushButton("  Yenile")
+        refresh_icon = get_icon("refresh", color="#ffffff", size=16)
+        if not refresh_icon.isNull():
+            btn_refresh_dash.setIcon(refresh_icon)
+            btn_refresh_dash.setIconSize(QSize(16, 16))
         btn_refresh_dash.clicked.connect(self._refresh_dashboard)
         btn_row.addWidget(btn_refresh_dash)
         btn_row.addStretch(1)
@@ -316,9 +348,17 @@ class LocalTrainerStudio(QMainWindow):
         profiles_card = QFrame()
         profiles_card.setObjectName("Card")
         profiles_layout = QVBoxLayout(profiles_card)
-        profiles_header = QLabel("\U0001F4C1  Kayitli Profiller")
+        profiles_header_row = QHBoxLayout()
+        folder_icon_lbl = QLabel()
+        folder_pix = get_pixmap("folder", color="#c8c9d6", size=16)
+        if folder_pix is not None:
+            folder_icon_lbl.setPixmap(folder_pix)
+        profiles_header_row.addWidget(folder_icon_lbl)
+        profiles_header = QLabel("Kayitli Profiller")
         profiles_header.setObjectName("CardHeader")
-        profiles_layout.addWidget(profiles_header)
+        profiles_header_row.addWidget(profiles_header)
+        profiles_header_row.addStretch(1)
+        profiles_layout.addLayout(profiles_header_row)
 
         self.dash_profile_list = QListWidget()
         self.dash_profile_list.setMaximumHeight(220)
@@ -332,11 +372,20 @@ class LocalTrainerStudio(QMainWindow):
     def _refresh_dashboard(self):
         if hasattr(self, "engine") and self.engine.attached:
             base_str = f"0x{self.engine.base_address:X}" if self.engine.base_address else "bulunamadi"
-            self.dash_status_label.setText(
-                f"\U0001F7E2  Bagli \u2192 {self.engine.process_name}  (base={base_str})"
-            )
-        elif hasattr(self, "dash_status_label"):
-            self.dash_status_label.setText("\U0001F534  Bagli degil")
+            dot_color = "#4CAF50"
+            status_text = f"Bagli \u2192 {self.engine.process_name}  (base={base_str})"
+        else:
+            dot_color = "#e53935"
+            status_text = "Bagli degil"
+
+        if hasattr(self, "dash_status_label"):
+            self.dash_status_label.setText(status_text)
+        if hasattr(self, "dash_status_icon"):
+            dot_pix = get_pixmap("circle", color=dot_color, size=12)
+            if dot_pix is not None:
+                self.dash_status_icon.setPixmap(dot_pix)
+            else:
+                self.dash_status_icon.setText("\U0001F534" if dot_color == "#e53935" else "\U0001F7E2")
 
         if hasattr(self, "dash_profile_list"):
             self.dash_profile_list.clear()
