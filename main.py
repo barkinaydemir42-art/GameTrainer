@@ -37,6 +37,7 @@ from memory_engine import (
 from profile_manager import save_profile, load_profile, profile_exists, PROFILES_DIR
 from hotkeys import HotkeyManager
 from script_engine import ScriptEngine, ScriptError
+from toggle_switch import ToggleSwitch
 import updater
 import config_manager
 from app_paths import get_app_data_dir
@@ -1081,11 +1082,11 @@ class LocalTrainerStudio(QMainWindow):
         self._refresh_freeze_table()
         self.log("Freeze Manager listesi temizlendi.")
 
-    def _on_freeze_checkbox_toggled(self, row: int, state: int):
+    def _on_freeze_checkbox_toggled(self, row: int, checked: bool):
         if row >= len(self.watched):
             return
         wa = self.watched[row]
-        wa.frozen = state == Qt.Checked
+        wa.frozen = checked
         if wa.frozen:
             addr = self._resolve_wa_address(wa)
             if addr is not None:
@@ -1104,11 +1105,20 @@ class LocalTrainerStudio(QMainWindow):
         for i, wa in enumerate(self.watched):
             row = self.freeze_table.rowCount()
             self.freeze_table.insertRow(row)
+            self.freeze_table.setRowHeight(row, 32)
 
-            chk = QCheckBox()
-            chk.setChecked(wa.frozen)
-            chk.stateChanged.connect(lambda state, r=row: self._on_freeze_checkbox_toggled(r, state))
-            self.freeze_table.setCellWidget(row, 0, chk)
+            chk = ToggleSwitch()
+            chk.set_checked_instant(wa.frozen)
+            chk.setEnabled(self.engine.attached)
+            chk.toggled.connect(lambda checked, r=row: self._on_freeze_checkbox_toggled(r, checked))
+            # Hucreye ortalanmis sekilde yerlestir (WeMod tarzi - satirin
+            # tam ortasinda, kenarlara yapismadan).
+            cell = QWidget()
+            cell_layout = QHBoxLayout(cell)
+            cell_layout.addWidget(chk)
+            cell_layout.setAlignment(Qt.AlignCenter)
+            cell_layout.setContentsMargins(0, 0, 0, 0)
+            self.freeze_table.setCellWidget(row, 0, cell)
 
             name_item = QTableWidgetItem(wa.name)
             name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
