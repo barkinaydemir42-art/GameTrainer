@@ -190,6 +190,17 @@ _STYLESHEET_TEMPLATE = """
         border-radius: 5px; text-align: center; color: white;
     }}
     QProgressBar::chunk {{ background-color: {accent}; border-radius: 5px; }}
+
+    /* ---- Oyun Kutuphanesi kartlari ---- */
+    #LibraryScroll {{ border: none; background: transparent; }}
+    #GameCard {{
+        background-color: {card_bg}; border: 1px solid {border};
+        border-radius: 10px;
+    }}
+    #GameCard:hover {{ border: 1px solid {accent}; background-color: {hover_bg}; }}
+    #GameCardCover {{ background-color: {surface}; border-radius: 6px; }}
+    #GameCardTitle {{ color: #ffffff; font-weight: 600; font-size: 12px; }}
+    #GameCardSource {{ color: {text_muted}; font-size: 11px; }}
 """
 
 

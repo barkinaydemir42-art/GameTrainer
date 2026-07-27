@@ -22,14 +22,16 @@ from typing import Optional
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout,
-    QHBoxLayout, QTabWidget, QPushButton, QLabel,
+    QHBoxLayout, QGridLayout, QTabWidget, QPushButton, QLabel,
     QLineEdit, QComboBox, QTableWidget, QTableWidgetItem,
     QTextEdit, QStatusBar, QDockWidget,
     QMessageBox, QListWidget, QGroupBox, QSplitter, QStackedWidget,
     QFileDialog, QInputDialog, QCheckBox, QHeaderView, QListWidgetItem,
-    QProgressBar, QButtonGroup, QFrame, QSizePolicy, QAbstractItemView
+    QProgressBar, QButtonGroup, QFrame, QSizePolicy, QAbstractItemView,
+    QScrollArea
 )
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize
+from PyQt5.QtGui import QPixmap, QPainter
 
 from memory_engine import (
     MemoryEngine, WatchedAddress, list_processes, list_processes_with_windows, ALL_TYPES,
@@ -39,7 +41,7 @@ from hotkeys import HotkeyManager
 from script_engine import ScriptEngine, ScriptError
 from toggle_switch import ToggleSwitch
 from icons import get_icon, get_pixmap
-from game_library import scan_all_libraries
+from game_library import scan_all_libraries, get_cached_cover_path, download_cover
 import updater
 import config_manager
 import themes
@@ -77,6 +79,109 @@ class ScanWorker(QThread):
             self.finished_ok.emit(result)
         except Exception as e:
             self.finished_error.emit(str(e))
+
+
+class CoverFetchWorker(QThread):
+    """Oyun kutuphanesi kartlari icin kapak gorsellerini arka planda
+    indirir. AG cagrilari (download_cover) UI thread'inde yapilirsa
+    arayuz her kapak icin kisa sureligine donar - bu yuzden tum liste
+    burada, ayri bir thread'de sirayla indirilir. Her basarili indirmede
+    cover_ready(index, path) yayinlanir, boylece kartlar hepsi bitmeden
+    tek tek guncellenir (kullanici 50 oyunluk kutuphanenin tamamen
+    inmesini beklemek zorunda kalmaz)."""
+    cover_ready = pyqtSignal(int, str)
+    finished_all = pyqtSignal()
+
+    def __init__(self, games):
+        super().__init__()
+        self.games = games
+
+    def run(self):
+        for i, g in enumerate(self.games):
+            try:
+                path = download_cover(g)
+            except Exception:
+                path = None
+            if path:
+                self.cover_ready.emit(i, path)
+        self.finished_all.emit()
+
+
+class GameCard(QFrame):
+    """Oyun Kutuphanesi sayfasindaki tek bir oyun karti (kapak + ad +
+    kaynak rozeti). Cift tiklaninca activated sinyali ile index'ini
+    bildirir - main.py bunu Trainer Wizard'a yonlendirmek icin kullanir."""
+    activated = pyqtSignal(int)
+
+    COVER_W, COVER_H = 120, 180  # Steam dikey kapak orani (2:3) ile uyumlu
+
+    def __init__(self, index: int, game, parent=None):
+        super().__init__(parent)
+        self.index = index
+        self.game = game
+        self.setObjectName("GameCard")
+        self.setAttribute(Qt.WA_Hover, True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedWidth(self.COVER_W + 24)
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(8, 8, 8, 8)
+        v.setSpacing(6)
+
+        self.cover_label = QLabel()
+        self.cover_label.setObjectName("GameCardCover")
+        self.cover_label.setFixedSize(self.COVER_W, self.COVER_H)
+        self.cover_label.setAlignment(Qt.AlignCenter)
+        self._set_placeholder()
+        v.addWidget(self.cover_label, 0, Qt.AlignHCenter)
+
+        name_lbl = QLabel(game.name)
+        name_lbl.setObjectName("GameCardTitle")
+        name_lbl.setWordWrap(True)
+        name_lbl.setAlignment(Qt.AlignCenter)
+        v.addWidget(name_lbl)
+
+        source_lbl = QLabel(game.source)
+        source_lbl.setObjectName("GameCardSource")
+        source_lbl.setAlignment(Qt.AlignCenter)
+        v.addWidget(source_lbl)
+
+        # Onbellekte zaten indirilmis bir kapak varsa (ag cagrisi
+        # yapmadan) hemen goster - sadece yeni/ilk kez gorulen Steam
+        # oyunlari icin arka plan indirmesi beklenir.
+        cached = get_cached_cover_path(game)
+        if cached:
+            self.set_cover(cached)
+
+    def _set_placeholder(self):
+        """Kapak henuz yokken (indirilene kadar, ya da Steam disi bir
+        kaynak oldugu icin hic olmayacaksa) gamepad ikonunu ortala."""
+        pm = get_pixmap("gamepad", color="#55565f", size=48)
+        canvas = QPixmap(self.COVER_W, self.COVER_H)
+        canvas.fill(Qt.transparent)
+        if pm is not None and not pm.isNull():
+            painter = QPainter(canvas)
+            x = (self.COVER_W - pm.width()) // 2
+            y = (self.COVER_H - pm.height()) // 2
+            painter.drawPixmap(x, y, pm)
+            painter.end()
+        self.cover_label.setPixmap(canvas)
+
+    def set_cover(self, path: str):
+        pm = QPixmap(path)
+        if pm.isNull():
+            return
+        # Karti tamamen doldurup ortadan kirp - kapak tam 2:3 olmayabilir
+        # (ozellikle yatay 'header' yedegi), boylece bosluk/deformasyon olmaz.
+        scaled = pm.scaled(self.COVER_W, self.COVER_H, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+        x = max(0, (scaled.width() - self.COVER_W) // 2)
+        y = max(0, (scaled.height() - self.COVER_H) // 2)
+        cropped = scaled.copy(x, y, self.COVER_W, self.COVER_H)
+        self.cover_label.setPixmap(cropped)
+
+    def mouseDoubleClickEvent(self, event):
+        self.activated.emit(self.index)
+        super().mouseDoubleClickEvent(event)
 
 
 class UpdateCheckWorker(QThread):
@@ -453,24 +558,28 @@ class LocalTrainerStudio(QMainWindow):
         toolbar.addStretch(1)
         card_layout.addLayout(toolbar)
 
-        self.library_table = QTableWidget(0, 3)
-        self.library_table.setHorizontalHeaderLabels(["Kaynak", "Oyun Adi", "Process (.exe)"])
-        self.library_table.horizontalHeader().setStretchLastSection(True)
-        self.library_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.library_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.library_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.library_table.itemDoubleClicked.connect(self._on_library_row_activated)
-        card_layout.addWidget(self.library_table)
+        self.library_scroll = QScrollArea()
+        self.library_scroll.setObjectName("LibraryScroll")
+        self.library_scroll.setWidgetResizable(True)
+        self.library_grid_container = QWidget()
+        self.library_grid = QGridLayout(self.library_grid_container)
+        self.library_grid.setSpacing(14)
+        self.library_grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.library_scroll.setWidget(self.library_grid_container)
+        card_layout.addWidget(self.library_scroll, 1)
 
         hint = QLabel(
             "Cift tikla: Trainer Wizard'a gonderir ve process adini doldurur. "
-            "Attach islemi icin oyunun ACIK/CALISIYOR olmasi gerekir."
+            "Attach islemi icin oyunun ACIK/CALISIYOR olmasi gerekir. Kapak "
+            "gorselleri sadece Steam oyunlari icin otomatik indirilir."
         )
         hint.setObjectName("PageSubtitle")
         hint.setWordWrap(True)
         card_layout.addWidget(hint)
 
         layout.addWidget(card, 1)
+        self._library_generation = 0
+        self._library_cards = []
         return widget
 
     def _scan_library(self):
@@ -484,7 +593,7 @@ class LocalTrainerStudio(QMainWindow):
 
     def _on_library_scan_done(self, games):
         self.btn_scan_library.setEnabled(True)
-        self._populate_library_table(games)
+        self._populate_library_grid(games)
         self.log(f"Oyun kutuphanesi tarandi: {len(games)} oyun bulundu.")
 
     def _on_library_scan_error(self, msg: str):
@@ -492,13 +601,24 @@ class LocalTrainerStudio(QMainWindow):
         self.library_status_label.setText("Tarama hatasi.")
         self.log(f"Kutuphane tarama hatasi: {msg}")
 
-    def _populate_library_table(self, games):
+    def _populate_library_grid(self, games):
         self._library_games = games
-        self.library_table.setRowCount(len(games))
-        for row, g in enumerate(games):
-            self.library_table.setItem(row, 0, QTableWidgetItem(g.source))
-            self.library_table.setItem(row, 1, QTableWidgetItem(g.name))
-            self.library_table.setItem(row, 2, QTableWidgetItem(g.process_name or "(bulunamadi - elle .exe sec)"))
+
+        # Onceki kartlari temizle (yeniden tarama sonrasi).
+        while self.library_grid.count():
+            item = self.library_grid.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        self._library_cards = []
+
+        columns = 6
+        for i, g in enumerate(games):
+            card = GameCard(i, g)
+            card.activated.connect(self._on_library_card_activated)
+            self.library_grid.addWidget(card, i // columns, i % columns)
+            self._library_cards.append(card)
+
         if games:
             self.library_status_label.setText(f"{len(games)} oyun bulundu.")
         else:
@@ -507,12 +627,29 @@ class LocalTrainerStudio(QMainWindow):
                 "kuruluysa calisir.)"
             )
 
-    def _on_library_row_activated(self, item: QTableWidgetItem):
+        # Kapaklari (sadece Steam, sadece henuz onbellekte olmayanlar icin)
+        # arka planda indir. _library_generation, kullanici hizlica tekrar
+        # tararsa eski bir tarama turunun sonuclarinin yeni (farkli indexli)
+        # kartlara yanlislikla yazilmasini onler.
+        self._library_generation += 1
+        gen = self._library_generation
+        self._cover_worker = CoverFetchWorker(games)
+        self._cover_worker.cover_ready.connect(
+            lambda idx, path, gen=gen: self._on_cover_ready(gen, idx, path)
+        )
+        self._cover_worker.start()
+
+    def _on_cover_ready(self, gen: int, index: int, path: str):
+        if gen != self._library_generation:
+            return  # eski bir tarama turundan kalma sonuc - artik gecersiz
+        if 0 <= index < len(self._library_cards):
+            self._library_cards[index].set_cover(path)
+
+    def _on_library_card_activated(self, index: int):
         games = getattr(self, "_library_games", [])
-        row = item.row()
-        if row < 0 or row >= len(games):
+        if index < 0 or index >= len(games):
             return
-        game = games[row]
+        game = games[index]
         proc_name = game.process_name
         if not proc_name:
             QMessageBox.information(

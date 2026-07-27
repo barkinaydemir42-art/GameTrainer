@@ -18,8 +18,12 @@ import json
 import glob
 import platform
 import subprocess
+import urllib.request
+import urllib.error
 from dataclasses import dataclass
 from typing import List, Optional
+
+from app_paths import get_app_data_dir
 
 IS_WINDOWS = platform.system() == "Windows"
 
@@ -35,11 +39,29 @@ class GameEntry:
     source: str                    # "Steam" | "Epic" | "GOG" | "Xbox"
     install_dir: str
     exe_path: Optional[str] = None
+    steam_appid: Optional[str] = None   # Sadece Steam icin - kapak gorseli icin gerekli
 
     @property
     def process_name(self) -> Optional[str]:
         if self.exe_path:
             return os.path.basename(self.exe_path)
+        return None
+
+    @property
+    def cover_url(self) -> Optional[str]:
+        """Steam kutuphanesindeki dikey kapak gorseli (600x900, 2:3 oran).
+        Steam'in herkese acik CDN'i - API anahtari veya kimlik dogrulama
+        gerektirmez. Sadece Steam kaynakli oyunlar icin (appid gerekir)."""
+        if self.source == "Steam" and self.steam_appid:
+            return f"https://cdn.akamai.steamstatic.com/steam/apps/{self.steam_appid}/library_600x900.jpg"
+        return None
+
+    @property
+    def cover_url_fallback(self) -> Optional[str]:
+        """Bazi eski/az bilinen oyunlarda dikey kapak yok, ama yatay
+        'header' gorseli neredeyse her zaman mevcut - yedek olarak kullanilir."""
+        if self.source == "Steam" and self.steam_appid:
+            return f"https://cdn.akamai.steamstatic.com/steam/apps/{self.steam_appid}/header.jpg"
         return None
 
 
@@ -142,6 +164,7 @@ def find_steam_games() -> List[GameEntry]:
                 continue
             name_m = re.search(r'"name"\s*"([^"]+)"', content)
             installdir_m = re.search(r'"installdir"\s*"([^"]+)"', content)
+            appid_m = re.search(r'"appid"\s*"(\d+)"', content)
             if not name_m or not installdir_m:
                 continue
             install_dir = os.path.join(steamapps, "common", installdir_m.group(1))
@@ -150,6 +173,7 @@ def find_steam_games() -> List[GameEntry]:
                 source="Steam",
                 install_dir=install_dir,
                 exe_path=_guess_main_exe(install_dir),
+                steam_appid=appid_m.group(1) if appid_m else None,
             ))
     return games
 
@@ -330,3 +354,70 @@ def scan_all_libraries() -> List[GameEntry]:
         unique.append(g)
     unique.sort(key=lambda g: g.name.lower())
     return unique
+
+
+# ---------------------------------------------------------------------
+# KAPAK GORSELLERI (Steam CDN)
+# ---------------------------------------------------------------------
+# Sadece Steam icin - Epic/GOG/Xbox'in bu tarz herkese acik, appid'siz
+# bir CDN'i yok (Epic/GOG kapaklari icin ayri, imzali/kimlik dogrulamali
+# API'ler gerekir - kapsam disi birakildi, kartlar bu kaynaklar icin
+# placeholder ikonla gosterilir).
+def _covers_cache_dir() -> str:
+    d = os.path.join(get_app_data_dir(), "covers")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def get_cached_cover_path(game: GameEntry) -> Optional[str]:
+    """Diskte onceden indirilmis bir kapak varsa yolunu dondurur. AG
+    CAGRISI YAPMAZ - sadece dosya sistemine bakar, bu yuzden UI (ana)
+    thread'inden guvenle cagrilabilir (ornegin kart ilk olusturulurken)."""
+    if not game.steam_appid:
+        return None
+    path = os.path.join(_covers_cache_dir(), f"{game.steam_appid}.jpg")
+    return path if os.path.isfile(path) else None
+
+
+def download_cover(game: GameEntry, timeout: int = 8) -> Optional[str]:
+    """Kapak gorselini indirir, diskte kalici olarak onbelleğe alir ve
+    yerel dosya yolunu dondurur.
+
+    AG CAGRISI YAPAR - bu fonksiyon UI thread'inde DEGIL, bir arka plan
+    thread'inde cagrilmalidir (bkz. main.py'deki CoverFetchWorker), yoksa
+    her kapak indirmesi arayuzu kisa sureligine dondurur.
+
+    Once dikey kutuphane gorselini (`cover_url`) dener; bu 404 donerse
+    (bazi eski/az bilinen oyunlarda dikey kapak yayinlanmamis olabilir)
+    yatay 'header' gorseline (`cover_url_fallback`) duser. Appid yoksa,
+    ag hatasi olursa veya iki URL de basarisiz olursa sessizce None
+    doner - kart placeholder ikonuyla gosterilmeye devam eder, uygulama
+    bozulmaz.
+    """
+    cached = get_cached_cover_path(game)
+    if cached:
+        return cached
+    if not game.steam_appid:
+        return None
+
+    dest = os.path.join(_covers_cache_dir(), f"{game.steam_appid}.jpg")
+    for url in (game.cover_url, game.cover_url_fallback):
+        if not url:
+            continue
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "LocalTrainerStudio-CoverFetch"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = resp.read()
+            if not data:
+                continue
+            # Once gecici dosyaya yaz, sonra atomik olarak yeniden adlandir -
+            # yarim inen bir dosyanin gecerli bir kapakmis gibi onbellekte
+            # kalmasini onler (ornegin indirme sirasinda ag kesilirse).
+            tmp_path = dest + ".tmp"
+            with open(tmp_path, "wb") as f:
+                f.write(data)
+            os.replace(tmp_path, dest)
+            return dest
+        except (urllib.error.URLError, OSError, ValueError):
+            continue
+    return None
