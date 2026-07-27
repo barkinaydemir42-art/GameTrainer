@@ -764,12 +764,29 @@ class LocalTrainerStudio(QMainWindow):
         layout = QVBoxLayout(widget)
         splitter = QSplitter(Qt.Vertical)
 
+        # ---- Basit / Gelismis gecisi ----
+        mode_row = QHBoxLayout()
+        self.scan_status_label = QLabel("Oyunda gordugun degeri gir ve ara.")
+        self.scan_status_label.setStyleSheet("color: #c8c9d6; font-weight: 600;")
+        mode_row.addWidget(self.scan_status_label)
+        mode_row.addStretch(1)
+        self.btn_toggle_advanced = QPushButton("Gelismis \u25be")
+        self.btn_toggle_advanced.setCheckable(True)
+        self.btn_toggle_advanced.setToolTip(
+            "Tip/mod secimi, Bilinmeyen Ilk Deger taramasi, AOB/Pattern\n"
+            "taramasi ve adres sutunu gibi teknik alanlari acar/kapatir."
+        )
+        self.btn_toggle_advanced.toggled.connect(self._toggle_scanner_advanced)
+        mode_row.addWidget(self.btn_toggle_advanced)
+        layout.addLayout(mode_row)
+
         # ---- Manuel deger tarama ----
         scan_box = QGroupBox("Manuel Tarama")
         scan_v = QVBoxLayout(scan_box)
 
         row0 = QHBoxLayout()
-        row0.addWidget(QLabel("Tip:"))
+        self.scan_type_label = QLabel("Tip:")
+        row0.addWidget(self.scan_type_label)
         self.scan_type_combo = QComboBox()
         self.scan_type_combo.addItems(ALL_TYPES)
         row0.addWidget(self.scan_type_combo)
@@ -788,8 +805,10 @@ class LocalTrainerStudio(QMainWindow):
         row0.addWidget(btn_next)
         scan_v.addLayout(row0)
 
-        # ---- Bilinmeyen Ilk Deger (Unknown Initial Value) ----
-        unknown_row = QHBoxLayout()
+        # ---- Bilinmeyen Ilk Deger (Unknown Initial Value) - GELISMIS ----
+        self.advanced_unknown_box = QWidget()
+        unknown_row = QHBoxLayout(self.advanced_unknown_box)
+        unknown_row.setContentsMargins(0, 0, 0, 0)
         self.btn_unknown_first_scan = btn_unknown_first = QPushButton("Bilinmeyen Ilk Deger: Tara")
         btn_unknown_first.setToolTip(
             "Aranan sayiyi bilmiyorsan kullan. Once bu butona bas (tum bellegin\n"
@@ -804,16 +823,16 @@ class LocalTrainerStudio(QMainWindow):
         self.btn_unknown_next_scan = btn_unknown_next = QPushButton("Bilinmeyen: Filtrele")
         btn_unknown_next.clicked.connect(self._unknown_next_scan)
         unknown_row.addWidget(btn_unknown_next)
-        scan_v.addLayout(unknown_row)
+        scan_v.addWidget(self.advanced_unknown_box)
 
-        hint = QLabel(
+        self.advanced_hint_label = QLabel(
             "Ipucu: 'byte' tipi ve 14 gibi cok yaygin bir sayi binlerce tesadufi\n"
             "eslesme bulur - bunlarin cogu gercek stat'la ilgisizdir ve Next Scan'de\n"
             "elenir. Can/mana/altin gibi degerler icin genelde 'int32' veya 'float'\n"
             "kullan ve mumkunse daha az rastlanan (ozgun) bir sayiyla basla."
         )
-        hint.setStyleSheet("color: #90caf9;")
-        scan_v.addWidget(hint)
+        self.advanced_hint_label.setStyleSheet("color: #90caf9;")
+        scan_v.addWidget(self.advanced_hint_label)
 
         self.scan_result_table = QTableWidget(0, 2)
         self.scan_result_table.setHorizontalHeaderLabels(["Adres", "Deger"])
@@ -837,8 +856,8 @@ class LocalTrainerStudio(QMainWindow):
         result_btn_row.addWidget(btn_bulk_add)
         scan_v.addLayout(result_btn_row)
 
-        # ---- AOB / Pattern tarama ----
-        aob_box = QGroupBox("Auto Signature (AOB) Builder")
+        # ---- AOB / Pattern tarama - GELISMIS ----
+        self.aob_box = aob_box = QGroupBox("Auto Signature (AOB) Builder")
         aob_layout = QVBoxLayout(aob_box)
         row1 = QHBoxLayout()
         row1.addWidget(QLabel("Pattern:"))
@@ -865,7 +884,29 @@ class LocalTrainerStudio(QMainWindow):
         splitter.addWidget(scan_box)
         splitter.addWidget(aob_box)
         layout.addWidget(splitter)
+        self.btn_toggle_advanced.setChecked(False)
+        self._toggle_scanner_advanced(False)
         return widget
+
+    def _toggle_scanner_advanced(self, checked: bool):
+        """Scan ekranini sadelestirir: Tip/mod secimi, Bilinmeyen Ilk Deger
+        taramasi, AOB/Pattern taramasi ve sonuc tablosundaki ham Adres
+        sutunu gibi teknik alanlar varsayilan olarak GIZLI - sadece
+        'Gelismis' acilinca gorunur. Basit modda kullanici sadece bir
+        deger girip arar, tipki WeMod/basit trainer arayuzlerindeki gibi."""
+        self.scan_type_label.setVisible(checked)
+        self.scan_type_combo.setVisible(checked)
+        self.scan_mode_combo.setVisible(checked)
+        self.advanced_unknown_box.setVisible(checked)
+        self.advanced_hint_label.setVisible(checked)
+        self.aob_box.setVisible(checked)
+        self.scan_result_table.setColumnHidden(0, not checked)
+        if checked:
+            self.btn_toggle_advanced.setText("Gelismis \u25b4")
+            self.scan_status_label.setText("Gelismis mod: tip, mod, AOB ve adresler gorunuyor.")
+        else:
+            self.btn_toggle_advanced.setText("Gelismis \u25be")
+            self.scan_status_label.setText("Oyunda gordugun degeri gir ve ara.")
 
     def _unknown_first_scan(self):
         if not self._require_attached():
@@ -912,6 +953,7 @@ class LocalTrainerStudio(QMainWindow):
         except ValueError:
             QMessageBox.warning(self, "Uyari", "Gecerli bir deger gir.")
             return
+        self.scan_status_label.setText(f"'{raw}' araniyor...")
         self._run_scan_in_background(
             "Taraniyor...", self.engine.first_scan,
             self._populate_scan_results, value, vtype,
@@ -930,6 +972,7 @@ class LocalTrainerStudio(QMainWindow):
             except ValueError:
                 QMessageBox.warning(self, "Uyari", "Gecerli bir deger gir.")
                 return
+        self.scan_status_label.setText("Yeniden araniyor...")
         self._run_scan_in_background(
             "Taraniyor...", self.engine.next_scan,
             self._populate_scan_results, vtype, mode=mode, value=value,
@@ -947,6 +990,16 @@ class LocalTrainerStudio(QMainWindow):
             extra += " - COK FAZLA SONUC, liste kesildi. Daha ozgun bir deger/tip dene."
         self.scan_result_label.setText(f"Sonuc: {len(results)}{extra}")
         self.status_bar.showMessage("Tarama tamamlandi.")
+        if not self.btn_toggle_advanced.isChecked():
+            if len(results) == 0:
+                self.scan_status_label.setText("Sonuc yok - oyunda degeri degistirip tekrar dene.")
+            elif len(results) == 1:
+                self.scan_status_label.setText("1 sonuc bulundu - listeye cift tikla ve ekle.")
+            else:
+                self.scan_status_label.setText(
+                    f"{len(results)} sonuc bulundu - oyunda degeri degistir, "
+                    "yeni degeri gir ve 'Next Scan'e bas."
+                )
         if len(results) == 0:
             self.log(
                 "Next Scan sonucu 0 -> muhtemelen onceki turdaki eslesmeler "
