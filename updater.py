@@ -39,7 +39,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-CURRENT_VERSION = "1.1.9"
+CURRENT_VERSION = "1.1.8"
 
 
 @dataclass
@@ -143,9 +143,38 @@ def apply_installer_update(installer_path: str, silent_args: str = ""):
     calisan LocalTrainerStudio.exe'yi otomatik kapatip kurulumdan sonra
     yeniden acar - bu yuzden eski (onefile .exe uzerine kopyalama) yontemine
     gore cok daha guvenilirdir ve dosya kilidi sorunlariyla ugrasmaz.
+
+    ONEMLI: installer.iss "PrivilegesRequired=admin" oldugu icin bu Setup.exe
+    HER ZAMAN yonetici yetkisi ister. subprocess.Popen() bunun icin YETERLI
+    DEGIL - Windows'ta CreateProcess (Popen'in altta kullandigi API) otomatik
+    yukseltme YAPMAZ; eger LocalTrainerStudio.exe zaten yonetici olarak
+    calismiyorsa, Popen ile Setup.exe baslatmaya calismak sessizce
+    "[WinError 740] The requested operation requires elevation" hatasi
+    verir ve guncelleme hicbir seffaf UAC istemi gostermeden basarisiz olur.
+    Bunun onune gecmek icin Windows'ta ShellExecuteW'yi "runas" verb'iyle
+    kullaniyoruz - bu, gerekirse gercek bir UAC onay penceresi acar.
     """
-    command = build_installer_launch_command(installer_path, silent_args)
-    subprocess.Popen(command)
+    if sys.platform == "win32":
+        import ctypes
+        params = silent_args  # ShellExecuteW parametreleri tek bir string bekler
+        result = ctypes.windll.shell32.ShellExecuteW(
+            None, "runas", installer_path, params, None, 1  # SW_SHOWNORMAL
+        )
+        # ShellExecuteW basari durumunda 32'den BUYUK bir deger doner;
+        # 32 veya altiysa hata kodudur (ornegin kullanici UAC'yi reddettiyse
+        # ERROR_CANCELLED=1223 gibi bir deger, ama ShellExecuteW bunu direkt
+        # donmez - <=32 degerler icin ayrintili aciklamalar Win32 API
+        # dokumaninda listelidir).
+        if int(result) <= 32:
+            raise RuntimeError(
+                f"Kurulum baslatilamadi (ShellExecute kodu: {result}). "
+                "UAC penceresini 'Evet' ile onayladigindan emin ol; "
+                "reddedersen guncelleme uygulanmaz."
+            )
+    else:
+        # Windows disi (test/gelistirme ortami) - eski davranisa geri don.
+        command = build_installer_launch_command(installer_path, silent_args)
+        subprocess.Popen(command)
     # Cagiran taraf (main.py) bu fonksiyondan sonra kendi uygulamasini
     # kapatmali (QApplication.quit()) - Inno Setup zaten kapatmaya
     # calisacaktir ama biz de temiz bir kapanis icin proaktif davraniriz.
