@@ -39,7 +39,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-CURRENT_VERSION = "1.2.6"
+CURRENT_VERSION = "1.2.7"
 
 
 @dataclass
