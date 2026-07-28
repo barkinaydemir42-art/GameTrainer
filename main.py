@@ -29,10 +29,10 @@ from PyQt5.QtWidgets import (
     QMessageBox, QListWidget, QGroupBox, QSplitter, QStackedWidget,
     QFileDialog, QInputDialog, QCheckBox, QHeaderView, QListWidgetItem,
     QProgressBar, QButtonGroup, QFrame, QSizePolicy, QAbstractItemView,
-    QScrollArea
+    QScrollArea, QGraphicsDropShadowEffect, QGridLayout
 )
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize
-from PyQt5.QtGui import QPixmap, QPainter
+from PyQt5.QtGui import QPixmap, QPainter, QColor
 
 from memory_engine import (
     MemoryEngine, WatchedAddress, list_processes, list_processes_with_windows, ALL_TYPES,
@@ -260,7 +260,14 @@ class LocalTrainerStudio(QMainWindow):
 
         sidebar = self._build_sidebar()
         self.main_layout.addWidget(sidebar)
-        self.main_layout.addWidget(self.pages, 1)
+
+        content_col = QWidget()
+        content_layout = QVBoxLayout(content_col)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
+        content_layout.addWidget(self._build_topbar())
+        content_layout.addWidget(self.pages, 1)
+        self.main_layout.addWidget(content_col, 1)
 
         self.init_log_dock()
         self.apply_theme()
@@ -367,6 +374,10 @@ class LocalTrainerStudio(QMainWindow):
         brand_layout.addStretch(1)
         layout.addWidget(brand)
 
+        section_lbl = QLabel("GENEL")
+        section_lbl.setObjectName("NavSectionLabel")
+        layout.addWidget(section_lbl)
+
         self.nav_group = QButtonGroup(self)
         self.nav_group.setExclusive(True)
 
@@ -420,44 +431,151 @@ class LocalTrainerStudio(QMainWindow):
             btn.setChecked(True)
 
     # ------------------------------------------------------------------
+    # UST BAR (arama + hizli eylemler) - wand/wemod tarzi
+    # ------------------------------------------------------------------
+    def _build_topbar(self) -> QWidget:
+        bar = QFrame()
+        bar.setObjectName("TopBar")
+        bar.setFixedHeight(56)
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(20, 0, 16, 0)
+        layout.setSpacing(10)
+
+        self.top_search = QLineEdit()
+        self.top_search.setObjectName("SearchBox")
+        self.top_search.setPlaceholderText("Profil, oyun veya betik ara...")
+        search_icon = get_icon("search", color="#a7a8b3", size=14)
+        if not search_icon.isNull():
+            self.top_search.addAction(search_icon, QLineEdit.LeadingPosition)
+        self.top_search.setFixedWidth(340)
+        self.top_search.setMinimumHeight(34)
+        self.top_search.textChanged.connect(self._on_top_search)
+        layout.addWidget(self.top_search)
+        layout.addStretch(1)
+
+        help_btn = QPushButton()
+        help_btn.setObjectName("TopIconButton")
+        help_btn.setCursor(Qt.PointingHandCursor)
+        help_btn.setToolTip("Yardim")
+        help_btn.setIcon(get_icon("help", color="#a7a8b3", size=18))
+        help_btn.setIconSize(QSize(18, 18))
+        help_btn.setFixedSize(32, 32)
+        layout.addWidget(help_btn)
+
+        bell_btn = QPushButton()
+        bell_btn.setObjectName("TopIconButton")
+        bell_btn.setCursor(Qt.PointingHandCursor)
+        bell_btn.setToolTip("Bildirimler")
+        bell_btn.setIcon(get_icon("bell", color="#a7a8b3", size=18))
+        bell_btn.setIconSize(QSize(18, 18))
+        bell_btn.setFixedSize(32, 32)
+        layout.addWidget(bell_btn)
+
+        version_pill = QPushButton(f"v{updater.CURRENT_VERSION}")
+        version_pill.setObjectName("ProBadge")
+        version_pill.setCursor(Qt.PointingHandCursor)
+        version_pill.setToolTip("Guncellemeleri kontrol et")
+        version_pill.clicked.connect(lambda: self._nav_clicked("settings"))
+        layout.addWidget(version_pill)
+
+        return bar
+
+    def _on_top_search(self, text: str):
+        # Su an icin arama, kayitli profil listesini filtreliyor - Wand'daki
+        # global arama gibi kapsam ilerde genisletilebilir.
+        if not hasattr(self, "dash_profile_list"):
+            return
+        text = text.strip().lower()
+        for i in range(self.dash_profile_list.count()):
+            item = self.dash_profile_list.item(i)
+            item.setHidden(bool(text) and text not in item.text().lower())
+
+    def _apply_shadow(self, widget, blur=28, alpha=130, y_offset=8, color="#000000"):
+        """Kartlara hafif bir 'elevation' (golge) hissi verir - Wand/WeMod
+        gibi platformlarin duz degil, katmanli/derinlikli gorunumune
+        yaklastirir. PyQt5 QSS box-shadow desteklemedigi icin
+        QGraphicsDropShadowEffect kullanilir."""
+        effect = QGraphicsDropShadowEffect(widget)
+        effect.setBlurRadius(blur)
+        qc = QColor(color)
+        qc.setAlpha(alpha)
+        effect.setColor(qc)
+        effect.setOffset(0, y_offset)
+        widget.setGraphicsEffect(effect)
+
+    # ------------------------------------------------------------------
     # DASHBOARD (ANA SAYFA)
     # ------------------------------------------------------------------
     def create_dashboard_tab(self) -> QWidget:
         widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(30, 30, 30, 30)
-        layout.setSpacing(16)
+        outer = QVBoxLayout(widget)
+        outer.setContentsMargins(0, 0, 0, 0)
 
+        scroll = QScrollArea()
+        scroll.setObjectName("LibraryScroll")
+        scroll.setWidgetResizable(True)
+        outer.addWidget(scroll)
+
+        inner = QWidget()
+        scroll.setWidget(inner)
+        layout = QVBoxLayout(inner)
+        layout.setContentsMargins(30, 26, 30, 30)
+        layout.setSpacing(22)
+
+        header_row = QHBoxLayout()
+        title_col = QVBoxLayout()
         title = QLabel("Ana Sayfa")
         title.setObjectName("PageTitle")
-        layout.addWidget(title)
-
+        title_col.addWidget(title)
         subtitle = QLabel("Bir oyuna baglanarak veya kayitli bir profil yukleyerek basla.")
         subtitle.setObjectName("PageSubtitle")
-        layout.addWidget(subtitle)
+        title_col.addWidget(subtitle)
+        header_row.addLayout(title_col)
+        header_row.addStretch(1)
+        layout.addLayout(header_row)
 
-        # ---- Durum karti ----
-        status_card = QFrame()
-        status_card.setObjectName("Card")
-        status_layout = QVBoxLayout(status_card)
+        # ---- Hero karti: baglanti durumu + ana eylemler (Wand karsilama karti gibi) ----
+        hero = QFrame()
+        hero.setObjectName("HeroCard")
+        hero.setMinimumHeight(150)
+        self._apply_shadow(hero, blur=36, alpha=110, y_offset=10, color="#000000")
+        hero_layout = QVBoxLayout(hero)
+        hero_layout.setContentsMargins(26, 22, 26, 22)
+        hero_layout.setSpacing(6)
+
+        eyebrow = QLabel("LOCALTRAINER STUDIO")
+        eyebrow.setObjectName("HeroEyebrow")
+        hero_layout.addWidget(eyebrow)
+
         status_row = QHBoxLayout()
+        status_row.setSpacing(8)
         self.dash_status_icon = QLabel()
         status_row.addWidget(self.dash_status_icon)
         self.dash_status_label = QLabel("Bagli degil")
-        self.dash_status_label.setObjectName("DashStatus")
+        self.dash_status_label.setObjectName("HeroTitle")
         status_row.addWidget(self.dash_status_label)
         status_row.addStretch(1)
-        status_layout.addLayout(status_row)
+        hero_layout.addLayout(status_row)
 
+        hero_sub = QLabel("Trainer Wizard ile saniyeler icinde deger tara, dondur ve profilini kaydet.")
+        hero_sub.setObjectName("HeroSubtitle")
+        hero_layout.addWidget(hero_sub)
+
+        hero_layout.addSpacing(6)
         btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
         btn_go_wizard = QPushButton("  Trainer Wizard'i Ac")
-        sparkle_icon = get_icon("sparkle", color="#ffffff", size=16)
+        btn_go_wizard.setObjectName("HeroPrimaryBtn")
+        btn_go_wizard.setCursor(Qt.PointingHandCursor)
+        sparkle_icon = get_icon("sparkle", color="#6748e0", size=16)
         if not sparkle_icon.isNull():
             btn_go_wizard.setIcon(sparkle_icon)
             btn_go_wizard.setIconSize(QSize(16, 16))
         btn_go_wizard.clicked.connect(lambda: self._nav_clicked("trainer"))
         btn_row.addWidget(btn_go_wizard)
         btn_refresh_dash = QPushButton("  Yenile")
+        btn_refresh_dash.setObjectName("HeroGhostBtn")
+        btn_refresh_dash.setCursor(Qt.PointingHandCursor)
         refresh_icon = get_icon("refresh", color="#ffffff", size=16)
         if not refresh_icon.isNull():
             btn_refresh_dash.setIcon(refresh_icon)
@@ -465,12 +583,54 @@ class LocalTrainerStudio(QMainWindow):
         btn_refresh_dash.clicked.connect(self._refresh_dashboard)
         btn_row.addWidget(btn_refresh_dash)
         btn_row.addStretch(1)
-        status_layout.addLayout(btn_row)
-        layout.addWidget(status_card)
+        hero_layout.addLayout(btn_row)
 
-        # ---- Kayitli profiller karti ----
+        layout.addWidget(hero)
+
+        # ---- Kisayol/istatistik kart izgarasi (Wand'daki "Yenilikler" gibi) ----
+        section_lbl = QLabel("Hizli Erisim")
+        section_lbl.setObjectName("CardHeader")
+        layout.addWidget(section_lbl)
+
+        grid = QGridLayout()
+        grid.setSpacing(16)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(2, 1)
+        layout.addLayout(grid)
+
+        try:
+            profile_count = len(list_profiles())
+        except Exception:
+            profile_count = 0
+
+        grid.addWidget(
+            self._build_shortcut_card(
+                "grid", "Oyun Kutuphanesi",
+                "Steam/Epic/GOG/Xbox oyunlarini otomatik algila.",
+                lambda: self._nav_clicked("library"),
+            ), 0, 0,
+        )
+        grid.addWidget(
+            self._build_shortcut_card(
+                "target", "Scanner & Auto AOB",
+                "Deger tara, sonuclari daralt, AOB imzasi cikar.",
+                lambda: self._open_trainer_subtab(1),
+            ), 0, 1,
+        )
+        grid.addWidget(
+            self._build_shortcut_card(
+                "shield", "Freeze Manager",
+                "Bulunan adresleri arka planda sabitle.",
+                lambda: self._open_trainer_subtab(2),
+                badge="AKTIF" if getattr(self, "watched", None) else None,
+            ), 0, 2,
+        )
+
+        # ---- Kayitli profiller karti (genis) ----
         profiles_card = QFrame()
         profiles_card.setObjectName("Card")
+        self._apply_shadow(profiles_card, blur=22, alpha=90, y_offset=6)
         profiles_layout = QVBoxLayout(profiles_card)
         profiles_header_row = QHBoxLayout()
         folder_icon_lbl = QLabel()
@@ -478,7 +638,7 @@ class LocalTrainerStudio(QMainWindow):
         if folder_pix is not None:
             folder_icon_lbl.setPixmap(folder_pix)
         profiles_header_row.addWidget(folder_icon_lbl)
-        profiles_header = QLabel("Kayitli Profiller")
+        profiles_header = QLabel(f"Kayitli Profiller  ({profile_count})")
         profiles_header.setObjectName("CardHeader")
         profiles_header_row.addWidget(profiles_header)
         profiles_header_row.addStretch(1)
@@ -492,6 +652,57 @@ class LocalTrainerStudio(QMainWindow):
         layout.addStretch(1)
         self._refresh_dashboard()
         return widget
+
+    def _build_shortcut_card(self, icon_name: str, title: str, desc: str, on_click, badge: str = None) -> QFrame:
+        """Wand'in ana sayfasindaki kucuk 'ozellik karti' hissini veren,
+        tiklaninca ilgili sekmeye goturen kisayol karti."""
+        card = QFrame()
+        card.setObjectName("FeatureCard")
+        card.setCursor(Qt.PointingHandCursor)
+        card.setMinimumHeight(108)
+        self._apply_shadow(card, blur=18, alpha=80, y_offset=4)
+
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(16, 14, 16, 14)
+        card_layout.setSpacing(8)
+
+        top_row = QHBoxLayout()
+        icon_wrap = QFrame()
+        icon_wrap.setObjectName("FeatureIconWrap")
+        icon_wrap.setFixedSize(34, 34)
+        icon_wrap_layout = QVBoxLayout(icon_wrap)
+        icon_wrap_layout.setContentsMargins(0, 0, 0, 0)
+        icon_wrap_layout.setAlignment(Qt.AlignCenter)
+        icon_lbl = QLabel()
+        pix = get_pixmap(icon_name, color="#a794ff", size=18)
+        if pix is not None:
+            icon_lbl.setPixmap(pix)
+        icon_wrap_layout.addWidget(icon_lbl)
+        top_row.addWidget(icon_wrap)
+        top_row.addStretch(1)
+        if badge:
+            badge_lbl = QLabel(badge)
+            badge_lbl.setObjectName("NewPill")
+            top_row.addWidget(badge_lbl)
+        card_layout.addLayout(top_row)
+
+        title_lbl = QLabel(title)
+        title_lbl.setObjectName("FeatureTitle")
+        card_layout.addWidget(title_lbl)
+
+        desc_lbl = QLabel(desc)
+        desc_lbl.setObjectName("FeatureDesc")
+        desc_lbl.setWordWrap(True)
+        card_layout.addWidget(desc_lbl)
+        card_layout.addStretch(1)
+
+        card.mousePressEvent = lambda _ev, cb=on_click: cb()
+        return card
+
+    def _open_trainer_subtab(self, index: int):
+        self._nav_clicked("trainer")
+        if hasattr(self, "sub_tabs"):
+            self.sub_tabs.setCurrentIndex(index)
 
     def _refresh_dashboard(self):
         if hasattr(self, "engine") and self.engine.attached:

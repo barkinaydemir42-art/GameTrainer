@@ -125,29 +125,95 @@ _STYLESHEET_TEMPLATE = """
     #Sidebar {{ background-color: {sidebar_bg}; border-right: 1px solid {border}; }}
     #Brand {{
         font-size: 15px; font-weight: bold; color: #ffffff;
-        background-color: {surface}; border-bottom: 1px solid {border};
+        background-color: {sidebar_bg}; border-bottom: 1px solid {border};
+    }}
+    #NavSectionLabel {{
+        color: {text_faint}; font-size: 10px; font-weight: 700;
+        padding: 14px 18px 4px 18px; letter-spacing: 1px;
     }}
     #NavButton {{
         text-align: left; background-color: transparent; color: {text_dim};
-        border: none; border-radius: 0px; padding: 12px 18px;
-        font-weight: 600; margin: 0px;
+        border: none; border-radius: 8px; padding: 10px 12px;
+        font-weight: 600; margin: 1px 10px;
     }}
     #NavButton:hover {{ background-color: {hover_bg}; color: #ffffff; }}
     #NavButton:checked {{
         background-color: {checked_bg}; color: #ffffff;
-        border-left: 3px solid {accent};
     }}
     #VersionLabel {{ color: {text_faint}; font-size: 11px; padding: 10px; }}
 
+    /* ---- Ust bar (top bar) ---- */
+    #TopBar {{ background-color: {window_bg}; border-bottom: 1px solid {border}; }}
+    #SearchBox {{
+        background-color: {surface}; border: 1px solid {border};
+        border-radius: 16px; padding: 6px 14px; color: {text_muted};
+    }}
+    #SearchBox:focus {{ border: 1px solid {accent}; color: #ffffff; }}
+    #TopIconButton {{
+        background-color: transparent; border: none; border-radius: 15px;
+        padding: 6px;
+    }}
+    #TopIconButton:hover {{ background-color: {hover_bg}; }}
+    #ProBadge {{
+        background-color: {accent}; color: #ffffff; font-weight: 700;
+        font-size: 11px; border-radius: 12px; padding: 6px 14px;
+    }}
+    #ProBadge:hover {{ background-color: {accent_hover}; }}
+
     /* ---- Dashboard ---- */
-    #PageTitle {{ font-size: 22px; font-weight: bold; color: #ffffff; }}
+    #PageTitle {{ font-size: 24px; font-weight: 800; color: #ffffff; }}
     #PageSubtitle {{ color: {text_muted}; font-size: 13px; }}
     #Card {{
         background-color: {card_bg}; border: 1px solid {border};
-        border-radius: 10px; padding: 16px;
+        border-radius: 14px; padding: 18px;
     }}
+    #Card:hover {{ border: 1px solid {input_border}; }}
     #CardHeader {{ font-size: 14px; font-weight: bold; color: {text_soft}; }}
+    #CardDesc {{ color: {text_muted}; font-size: 12px; }}
     #DashStatus {{ font-size: 15px; font-weight: 600; color: #ffffff; padding-bottom: 8px; }}
+
+    /* ---- Hero (Wand-tarzi karsilama karti) ---- */
+    #HeroCard {{
+        border-radius: 18px;
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+            stop:0 {accent}, stop:1 {surface});
+        border: 1px solid {border};
+    }}
+    #HeroEyebrow {{
+        color: rgba(255,255,255,0.85); font-size: 11px; font-weight: 700;
+        letter-spacing: 1px;
+    }}
+    #HeroTitle {{ color: #ffffff; font-size: 21px; font-weight: 800; }}
+    #HeroSubtitle {{ color: rgba(255,255,255,0.82); font-size: 13px; }}
+    #HeroPrimaryBtn {{
+        background-color: #ffffff; color: {accent_pressed};
+        border-radius: 9px; padding: 10px 18px; font-weight: 700; border: none;
+    }}
+    #HeroPrimaryBtn:hover {{ background-color: #f0f0f5; }}
+    #HeroGhostBtn {{
+        background-color: rgba(255,255,255,0.14); color: #ffffff;
+        border-radius: 9px; padding: 10px 16px; font-weight: 600;
+        border: 1px solid rgba(255,255,255,0.35);
+    }}
+    #HeroGhostBtn:hover {{ background-color: rgba(255,255,255,0.24); }}
+
+    /* ---- Ozellik/istatistik kartlari (Yenilikler grid) ---- */
+    #FeatureCard {{
+        background-color: {card_bg}; border: 1px solid {border};
+        border-radius: 14px;
+    }}
+    #FeatureCard:hover {{ border: 1px solid {accent}; background-color: {hover_bg}; }}
+    #FeatureIconWrap {{
+        background-color: {surface}; border-radius: 10px;
+    }}
+    #FeatureTitle {{ color: #ffffff; font-size: 13px; font-weight: 700; }}
+    #FeatureDesc {{ color: {text_muted}; font-size: 11.5px; }}
+    #StatValue {{ color: #ffffff; font-size: 20px; font-weight: 800; }}
+    #StatLabel {{ color: {text_muted}; font-size: 11px; font-weight: 600; }}
+    #NewPill {{
+        background-color: {accent}; color: #ffffff; font-size: 9px;
+        font-weight: 800; border-radius: 8px; padding: 2px 7px;
+    }}
 
     /* ---- Sekmeler (tabs) ---- */
     QTabWidget::pane {{ border: 1px solid {border}; background-color: {pane_bg}; border-radius: 6px; }}
