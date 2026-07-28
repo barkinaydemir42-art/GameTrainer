@@ -198,6 +198,29 @@ _STYLESHEET_TEMPLATE = """
         font-size: 11px; border-radius: 14px; border: 1px solid {border};
     }}
 
+    /* ---- "Su An Oynanıyor" paneli (topbar'in altinda, sadece bagliyken acilir) ---- */
+    #NowPlayingBar {{
+        background-color: {surface}; border-bottom: 1px solid {border};
+    }}
+    #NowPlayingEyebrow {{
+        color: {accent_soft}; font-size: 10px; font-weight: 800; letter-spacing: 1px;
+    }}
+    #NowPlayingTitle {{ color: #ffffff; font-size: 17px; font-weight: 800; }}
+    #NowPlayingStatValue {{ color: #ffffff; font-size: 15px; font-weight: 800; }}
+    #NowPlayingStatLabel {{
+        color: {text_faint}; font-size: 9px; font-weight: 700; letter-spacing: 0.5px;
+    }}
+    #NowPlayingDetachBtn {{
+        background-color: transparent; color: #ff6b6b; border: 1px solid #ff6b6b55;
+        border-radius: 7px; padding: 7px 14px; font-weight: 600;
+    }}
+    #NowPlayingDetachBtn:hover {{ background-color: #ff6b6b22; border-color: #ff6b6b; }}
+
+    /* ---- Durum cubugu kalici gostergeleri ---- */
+    #StatusPermLabel {{
+        color: {text_muted}; font-weight: 600; font-size: 11.5px; padding: 0 10px;
+    }}
+
     /* ---- Dashboard ---- */
     #PageTitle {{ font-size: 24px; font-weight: 800; color: #ffffff; }}
     #PageSubtitle {{ color: {text_muted}; font-size: 13px; }}

@@ -1,0 +1,382 @@
+diff --git a/main.py b/main.py
+index 84b3db3..0a603ea 100644
+--- a/main.py
++++ b/main.py
+@@ -32,7 +32,10 @@ from PyQt5.QtWidgets import (
+     QScrollArea, QGraphicsDropShadowEffect, QGridLayout,
+     QSystemTrayIcon, QMenu, QAction, QGraphicsOpacityEffect
+ )
+-from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize, QEvent, QPropertyAnimation, QEasingCurve, QRect
++from PyQt5.QtCore import (
++    Qt, QTimer, QThread, pyqtSignal, QSize, QEvent, QPropertyAnimation,
++    QEasingCurve, QRect, QObject,
++)
+ from PyQt5.QtGui import QPixmap, QPainter, QColor, QIcon
+ 
+ from title_bar import CustomTitleBar
+@@ -115,6 +118,55 @@ class CoverFetchWorker(QThread):
+         self.finished_all.emit()
+ 
+ 
++class HoverElevation(QObject):
++    """GameCard'daki hover-golge efektinin genellenmis hali: herhangi bir
++    widget'a takilinca, fare uzerine gelince golgeyi yumusakca buyutup
++    ayrilinca soner - kart/buton "kaldirilabilir" hissi verir. Kisayol
++    kartlari, profil karti gibi GameCard olmayan widget'lar icin kullanilir
++    (GameCard kendi ozel implementasyonunu korur)."""
++
++    def __init__(self, widget, blur_max=22, color=QColor(124, 92, 255), parent=None):
++        super().__init__(parent or widget)
++        self.widget = widget
++        self.blur_max = blur_max
++        self.color = color
++
++        shadow = widget.graphicsEffect()
++        if not isinstance(shadow, QGraphicsDropShadowEffect):
++            shadow = QGraphicsDropShadowEffect(widget)
++            shadow.setOffset(0, 4)
++            shadow.setBlurRadius(0)
++            shadow.setColor(QColor(color.red(), color.green(), color.blue(), 0))
++            widget.setGraphicsEffect(shadow)
++        self._shadow = shadow
++        # Widget zaten sabit bir golgeyle geldiyse (_apply_shadow ile), hover
++        # bittiginde sifira degil bu taban degere donulur - kart "duz" hale
++        # gelip elevation'ini tamamen kaybetmesin diye.
++        self._base_blur = shadow.blurRadius()
++        self._base_color = shadow.color()
++
++        self._anim = QPropertyAnimation(self._shadow, b"blurRadius", self)
++        self._anim.setDuration(160)
++        self._anim.setEasingCurve(QEasingCurve.OutCubic)
++        widget.installEventFilter(self)
++
++    def eventFilter(self, obj, event):
++        if obj is self.widget:
++            if event.type() == QEvent.Enter:
++                self._shadow.setColor(QColor(self.color.red(), self.color.green(), self.color.blue(), 150))
++                self._animate_to(self.blur_max)
++            elif event.type() == QEvent.Leave:
++                self._shadow.setColor(self._base_color)
++                self._animate_to(self._base_blur)
++        return super().eventFilter(obj, event)
++
++    def _animate_to(self, value):
++        self._anim.stop()
++        self._anim.setStartValue(self._shadow.blurRadius())
++        self._anim.setEndValue(value)
++        self._anim.start()
++
++
+ class GameCard(QFrame):
+     """Oyun Kutuphanesi sayfasindaki tek bir oyun karti (kapak + ad +
+     kaynak rozeti). Cift tiklaninca activated sinyali ile index'ini
+@@ -269,6 +321,12 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
+         self.title_bar = None  # asagida _build_window_root() icinde olusturulur
+         self._window_title_text = window_title
+ 
++        # ---- Acilis animasyonu icin baslangicta tamamen saydam ----
++        # showEvent() ilk tetiklendiginde 0 -> 1 opaklik animasyonuyla
++        # yumusakca belirir (WeMod/Wand tarzi acilis hissi).
++        self.setWindowOpacity(0.0)
++        self._opening_anim_done = False
++
+         # ---- Gercek backend ----
+         self.engine = MemoryEngine()
+         self.hotkeys = HotkeyManager()
+@@ -281,6 +339,8 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
+         self._pointer_scan_candidates: dict = {}
+         self.current_game_label = ""
+         self.byte_patches: dict[int, bytes] = {}  # address -> orijinal bytelar (undo icin)
++        self._hover_animators = []  # HoverElevation referanslarini canli tutar (gc onlemi)
++        self._attach_time = None  # "Su An Oynanıyor" panelindeki sure sayaci icin
+ 
+         # ---- Guncelleme durumu ----
+         self.app_config = config_manager.load_config()
+@@ -327,6 +387,8 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
+         content_layout.setContentsMargins(0, 0, 0, 0)
+         content_layout.setSpacing(0)
+         content_layout.addWidget(self._build_topbar())
++        self.now_playing_bar = self._build_now_playing_bar()
++        content_layout.addWidget(self.now_playing_bar)
+         content_layout.addWidget(self.pages, 1)
+         self.main_layout.addWidget(content_col, 1)
+ 
+@@ -336,6 +398,7 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
+         self.status_bar = QStatusBar()
+         self.setStatusBar(self.status_bar)
+         self.status_bar.showMessage("Hazir | Bir oyuna baglanarak basla.")
++        self._build_status_bar_widgets()
+ 
+         # Arka plan dongusu: freeze uygula + tablo yenile
+         self.timer = QTimer(self)
+@@ -364,6 +427,18 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
+             except Exception:
+                 pass
+ 
++        # ---- Acilis animasyonu (fade-in) ----
++        # Pencere ilk kez gercekten gosterildiginde bir kez calisir; 0
++        # opaklikten baslayip yumusakca 1'e cikar.
++        if not self._opening_anim_done:
++            self._opening_anim_done = True
++            self._opening_anim = QPropertyAnimation(self, b"windowOpacity", self)
++            self._opening_anim.setDuration(280)
++            self._opening_anim.setStartValue(0.0)
++            self._opening_anim.setEndValue(1.0)
++            self._opening_anim.setEasingCurve(QEasingCurve.OutCubic)
++            self._opening_anim.start()
++
+     def changeEvent(self, event):
+         super().changeEvent(event)
+         # Pencere durumu Windows tarafindan degistirildiginde de (ör. Win+Up
+@@ -710,6 +785,176 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
+             elif hasattr(self, "library_status_label") and not text and self._library_games:
+                 self.library_status_label.setText(f"{len(self._library_games)} oyun bulundu.")
+ 
++    # ------------------------------------------------------------------
++    # "SU AN OYNANIYOR" PANELI (Now Playing)
++    # ------------------------------------------------------------------
++    def _build_now_playing_bar(self) -> QWidget:
++        """Ust barin altinda, sadece bir oyuna bagliyken acilan buyuk
++        durum paneli - WeMod'un 'oyun calisirken' vurgusuna benzer.
++        Varsayilan olarak yukseklik 0 (gizli); attach/detach'te
++        maximumHeight animasyonuyla acilip kapanir."""
++        bar = QFrame()
++        bar.setObjectName("NowPlayingBar")
++        bar.setMaximumHeight(0)  # baglanti olmadan tamamen kapali baslar
++
++        layout = QHBoxLayout(bar)
++        layout.setContentsMargins(26, 0, 22, 0)
++        layout.setSpacing(14)
++
++        # Nabiz atan yesil "canli" noktasi (topbar rozetiyle ayni ruh)
++        self.now_playing_dot = QLabel()
++        self.now_playing_dot.setFixedWidth(14)
++        layout.addWidget(self.now_playing_dot)
++
++        title_col = QVBoxLayout()
++        title_col.setSpacing(1)
++        eyebrow = QLabel("SU AN OYNANIYOR")
++        eyebrow.setObjectName("NowPlayingEyebrow")
++        title_col.addWidget(eyebrow)
++        self.now_playing_title = QLabel("")
++        self.now_playing_title.setObjectName("NowPlayingTitle")
++        title_col.addWidget(self.now_playing_title)
++        layout.addLayout(title_col)
++
++        layout.addStretch(1)
++
++        # Sag taraf: sure + izlenen adres sayisi + hizli detach
++        stat_col = QVBoxLayout()
++        stat_col.setSpacing(1)
++        stat_col.setAlignment(Qt.AlignRight)
++        self.now_playing_uptime = QLabel("00:00:00")
++        self.now_playing_uptime.setObjectName("NowPlayingStatValue")
++        self.now_playing_uptime.setAlignment(Qt.AlignRight)
++        stat_col.addWidget(self.now_playing_uptime)
++        uptime_lbl = QLabel("SURE")
++        uptime_lbl.setObjectName("NowPlayingStatLabel")
++        uptime_lbl.setAlignment(Qt.AlignRight)
++        stat_col.addWidget(uptime_lbl)
++        layout.addLayout(stat_col)
++
++        stat_col2 = QVBoxLayout()
++        stat_col2.setSpacing(1)
++        stat_col2.setAlignment(Qt.AlignRight)
++        self.now_playing_freeze = QLabel("0")
++        self.now_playing_freeze.setObjectName("NowPlayingStatValue")
++        self.now_playing_freeze.setAlignment(Qt.AlignRight)
++        stat_col2.addWidget(self.now_playing_freeze)
++        freeze_lbl = QLabel("DONDURULMUS")
++        freeze_lbl.setObjectName("NowPlayingStatLabel")
++        freeze_lbl.setAlignment(Qt.AlignRight)
++        stat_col2.addWidget(freeze_lbl)
++        layout.addLayout(stat_col2)
++
++        btn_detach_np = QPushButton("Baglantiyi Kes")
++        btn_detach_np.setObjectName("NowPlayingDetachBtn")
++        btn_detach_np.setCursor(Qt.PointingHandCursor)
++        btn_detach_np.clicked.connect(self._detach)
++        layout.addWidget(btn_detach_np)
++
++        self._now_playing_anim = None
++        return bar
++
++    def _set_now_playing_height(self, target: int):
++        """NowPlayingBar'in yuksekligini yumusakca hedefe animasyonla
++        getirir (0 = tamamen kapali, ~72 = acik)."""
++        if self._now_playing_anim is not None:
++            self._now_playing_anim.stop()
++        anim = QPropertyAnimation(self.now_playing_bar, b"maximumHeight", self.now_playing_bar)
++        anim.setDuration(240)
++        anim.setEasingCurve(QEasingCurve.OutCubic)
++        anim.setStartValue(self.now_playing_bar.maximumHeight())
++        anim.setEndValue(target)
++        anim.start()
++        self._now_playing_anim = anim
++
++    def _show_now_playing(self, process_name: str):
++        self._attach_time = datetime.now()
++        self.now_playing_title.setText(process_name)
++        dot_pix = get_pixmap("circle", color="#4CAF50", size=10)
++        if dot_pix is not None:
++            self.now_playing_dot.setPixmap(dot_pix)
++        else:
++            self.now_playing_dot.setText("\U0001F7E2")
++        self._update_now_playing_stats()
++        self._set_now_playing_height(72)
++
++        # Yesil nokta, baglanti rozetindeki gibi yavasca nabiz atar.
++        effect = QGraphicsOpacityEffect(self.now_playing_dot)
++        self.now_playing_dot.setGraphicsEffect(effect)
++        pulse = QPropertyAnimation(effect, b"opacity", self.now_playing_dot)
++        pulse.setDuration(1100)
++        pulse.setStartValue(1.0)
++        pulse.setKeyValueAt(0.5, 0.4)
++        pulse.setEndValue(1.0)
++        pulse.setLoopCount(-1)
++        pulse.setEasingCurve(QEasingCurve.InOutSine)
++        pulse.start()
++        self._now_playing_pulse = pulse
++
++    def _hide_now_playing(self):
++        self._attach_time = None
++        self._set_now_playing_height(0)
++        if getattr(self, "_now_playing_pulse", None) is not None:
++            self._now_playing_pulse.stop()
++            self.now_playing_dot.setGraphicsEffect(None)
++            self._now_playing_pulse = None
++
++    def _update_now_playing_stats(self):
++        """_tick() tarafindan (saniyede ~2 kez) cagrilir - sure ve
++        dondurulmus adres sayacini gunceller. Panel kapaliyken (baglanti
++        yokken) ucuz bir no-op olsun diye once kontrol edilir."""
++        if not hasattr(self, "now_playing_uptime"):
++            return
++        if self._attach_time is not None:
++            elapsed = int((datetime.now() - self._attach_time).total_seconds())
++            self.now_playing_uptime.setText(self._format_duration(elapsed))
++        frozen_count = len([w for w in getattr(self, "watched", []) if w.frozen])
++        self.now_playing_freeze.setText(str(frozen_count))
++
++    @staticmethod
++    def _format_duration(total_seconds: int) -> str:
++        h, rem = divmod(max(0, total_seconds), 3600)
++        m, s = divmod(rem, 60)
++        return f"{h:02d}:{m:02d}:{s:02d}"
++
++    # ------------------------------------------------------------------
++    # DURUM CUBUGU (status bar) - daha bilgilendirici kalici widget'lar
++    # ------------------------------------------------------------------
++    def _build_status_bar_widgets(self):
++        """Sadece gecici showMessage() metniyle yetinmek yerine, sag
++        tarafta hep gorunen (kalici) kucuk gostergeler ekler: baglanti
++        durumu, izlenen/dondurulmus adres sayisi ve baglanti suresi."""
++        self.status_conn_label = QLabel("\u25CB Bagli degil")
++        self.status_conn_label.setObjectName("StatusPermLabel")
++        self.status_bar.addPermanentWidget(self.status_conn_label)
++
++        self.status_watch_label = QLabel("Izlenen: 0")
++        self.status_watch_label.setObjectName("StatusPermLabel")
++        self.status_bar.addPermanentWidget(self.status_watch_label)
++
++        self.status_uptime_label = QLabel("")
++        self.status_uptime_label.setObjectName("StatusPermLabel")
++        self.status_bar.addPermanentWidget(self.status_uptime_label)
++
++    def _update_status_bar_live(self):
++        """_tick() tarafindan cagrilir - kalici durum cubugu
++        widget'larini gunceller (baglantiyken sure/izlenen sayisi canli
++        akar, disaridan bakildiginda uygulamanin 'yasadigini' hisssettirir)."""
++        if not hasattr(self, "status_watch_label"):
++            return
++        watched_count = len(getattr(self, "watched", []))
++        frozen_count = len([w for w in self.watched if w.frozen])
++        self.status_watch_label.setText(f"Izlenen: {watched_count} (dondurulmus: {frozen_count})")
++
++        if self.engine.attached:
++            self.status_conn_label.setText(f"\u25CF Bagli: {self.engine.process_name}")
++            if self._attach_time is not None:
++                elapsed = int((datetime.now() - self._attach_time).total_seconds())
++                self.status_uptime_label.setText(f"Sure: {self._format_duration(elapsed)}")
++        else:
++            self.status_conn_label.setText("\u25CB Bagli degil")
++            self.status_uptime_label.setText("")
++
+     def _apply_shadow(self, widget, blur=28, alpha=130, y_offset=8, color="#000000"):
+         """Kartlara hafif bir 'elevation' (golge) hissi verir - Wand/WeMod
+         gibi platformlarin duz degil, katmanli/derinlikli gorunumune
+@@ -907,6 +1152,7 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
+         profiles_card = QFrame()
+         profiles_card.setObjectName("Card")
+         self._apply_shadow(profiles_card, blur=22, alpha=90, y_offset=6)
++        self._hover_animators.append(HoverElevation(profiles_card, blur_max=30))
+         profiles_layout = QVBoxLayout(profiles_card)
+         profiles_header_row = QHBoxLayout()
+         folder_icon_lbl = QLabel()
+@@ -950,6 +1196,7 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
+         card.setCursor(Qt.PointingHandCursor)
+         card.setMinimumHeight(108)
+         self._apply_shadow(card, blur=18, alpha=80, y_offset=4)
++        self._hover_animators.append(HoverElevation(card, blur_max=26))
+ 
+         card_layout = QVBoxLayout(card)
+         card_layout.setContentsMargins(16, 14, 16, 14)
+@@ -1411,6 +1658,7 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
+         self.log(f"Baglanildi: {process_name}")
+         show_toast(self, f"Baglanildi: {process_name}", kind="success")
+         self._set_connection_badge(True, process_name)
++        self._show_now_playing(process_name)
+         if self.engine.base_address is None:
+             self.log(
+                 "UYARI: module base adresi bulunamadi - pointer zinciri "
+@@ -1434,6 +1682,7 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
+         self.log("Baglanti kesildi.")
+         show_toast(self, "Baglanti kesildi.", kind="info")
+         self._set_connection_badge(False)
++        self._hide_now_playing()
+         self._refresh_dashboard()
+ 
+     def _try_autoload_profile(self, process_name):
+@@ -3121,6 +3370,8 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
+     # ARKA PLAN DONGUSU
+     # ------------------------------------------------------------------
+     def _tick(self):
++        self._update_now_playing_stats()
++        self._update_status_bar_live()
+         if not self.engine.attached:
+             return
+         # Oyun kapatildiysa (process artik yok) otomatik olarak baglantiyi
+diff --git a/themes.py b/themes.py
+index 33b8f61..19369c3 100644
+--- a/themes.py
++++ b/themes.py
+@@ -198,6 +198,29 @@ _STYLESHEET_TEMPLATE = """
+         font-size: 11px; border-radius: 14px; border: 1px solid {border};
+     }}
+ 
++    /* ---- "Su An Oynanıyor" paneli (topbar'in altinda, sadece bagliyken acilir) ---- */
++    #NowPlayingBar {{
++        background-color: {surface}; border-bottom: 1px solid {border};
++    }}
++    #NowPlayingEyebrow {{
++        color: {accent_soft}; font-size: 10px; font-weight: 800; letter-spacing: 1px;
++    }}
++    #NowPlayingTitle {{ color: #ffffff; font-size: 17px; font-weight: 800; }}
++    #NowPlayingStatValue {{ color: #ffffff; font-size: 15px; font-weight: 800; }}
++    #NowPlayingStatLabel {{
++        color: {text_faint}; font-size: 9px; font-weight: 700; letter-spacing: 0.5px;
++    }}
++    #NowPlayingDetachBtn {{
++        background-color: transparent; color: #ff6b6b; border: 1px solid #ff6b6b55;
++        border-radius: 7px; padding: 7px 14px; font-weight: 600;
++    }}
++    #NowPlayingDetachBtn:hover {{ background-color: #ff6b6b22; border-color: #ff6b6b; }}
++
++    /* ---- Durum cubugu kalici gostergeleri ---- */
++    #StatusPermLabel {{
++        color: {text_muted}; font-weight: 600; font-size: 11.5px; padding: 0 10px;
++    }}
++
+     /* ---- Dashboard ---- */
+     #PageTitle {{ font-size: 24px; font-weight: 800; color: #ffffff; }}
+     #PageSubtitle {{ color: {text_muted}; font-size: 13px; }}
