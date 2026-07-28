@@ -188,6 +188,16 @@ _STYLESHEET_TEMPLATE = """
     }}
     #ProBadge:hover {{ background-color: {accent_hover}; }}
 
+    /* ---- Canli baglanti rozeti (topbar) ---- */
+    #ConnectionBadgeOn {{
+        background-color: #1c3a2a; color: #6fe0a0; font-weight: 700;
+        font-size: 11px; border-radius: 14px; border: 1px solid #2f6b48;
+    }}
+    #ConnectionBadgeOff {{
+        background-color: {surface}; color: {text_faint}; font-weight: 600;
+        font-size: 11px; border-radius: 14px; border: 1px solid {border};
+    }}
+
     /* ---- Dashboard ---- */
     #PageTitle {{ font-size: 24px; font-weight: 800; color: #ffffff; }}
     #PageSubtitle {{ color: {text_muted}; font-size: 13px; }}
@@ -416,6 +426,12 @@ _STYLESHEET_TEMPLATE = """
     #GameCardCover {{ background-color: {surface}; border-radius: 6px; }}
     #GameCardTitle {{ color: #ffffff; font-weight: 600; font-size: 12px; }}
     #GameCardSource {{ color: {text_muted}; font-size: 11px; }}
+
+    /* ---- Kutuphane tarama iskeleti (skeleton loading) ---- */
+    #SkeletonCard {{
+        background-color: {card_bg}; border: 1px solid {border};
+        border-radius: 10px;
+    }}
 """
 
 

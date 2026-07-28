@@ -600,6 +600,15 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
         self.top_search.setMinimumHeight(34)
         self.top_search.textChanged.connect(self._on_top_search)
         layout.addWidget(self.top_search)
+
+        # ---- Canli baglanti durumu (WeMod'un "Connected" rozeti) ----
+        self.connection_badge = QLabel()
+        self.connection_badge.setObjectName("ConnectionBadgeOff")
+        self.connection_badge.setFixedHeight(28)
+        layout.addWidget(self.connection_badge)
+        self._connection_pulse_anim = None
+        self._set_connection_badge(False, "")
+
         layout.addStretch(1)
 
         help_btn = QPushButton()
@@ -628,6 +637,40 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
         layout.addWidget(version_pill)
 
         return bar
+
+    def _set_connection_badge(self, connected: bool, label: str = ""):
+        """Ust bardaki canli baglanti rozetini gunceller. Bagliyken yesil
+        nokta yavasca nabiz gibi atar (WeMod'un 'Connected' gostergesi)."""
+        if not hasattr(self, "connection_badge"):
+            return
+        if connected:
+            self.connection_badge.setObjectName("ConnectionBadgeOn")
+            self.connection_badge.setText(f"  \u25CF  {label or 'Bagli'}  ")
+        else:
+            self.connection_badge.setObjectName("ConnectionBadgeOff")
+            self.connection_badge.setText("  \u25CB  Bagli degil  ")
+        # objectName degisince stil yeniden hesaplansin diye stylesheet'i
+        # bu widget icin zorla tazeliyoruz.
+        self.connection_badge.style().unpolish(self.connection_badge)
+        self.connection_badge.style().polish(self.connection_badge)
+
+        if self._connection_pulse_anim is not None:
+            self._connection_pulse_anim.stop()
+            self.connection_badge.setGraphicsEffect(None)
+            self._connection_pulse_anim = None
+
+        if connected:
+            effect = QGraphicsOpacityEffect(self.connection_badge)
+            self.connection_badge.setGraphicsEffect(effect)
+            anim = QPropertyAnimation(effect, b"opacity", self.connection_badge)
+            anim.setDuration(1100)
+            anim.setStartValue(1.0)
+            anim.setKeyValueAt(0.5, 0.55)
+            anim.setEndValue(1.0)
+            anim.setLoopCount(-1)  # sonsuz dongu - bagli oldugu surece nabiz atar
+            anim.setEasingCurve(QEasingCurve.InOutSine)
+            anim.start()
+            self._connection_pulse_anim = anim
 
     def _on_top_search(self, text: str):
         # Wand'daki gibi tek arama kutusu birden fazla yeri filtreler:
@@ -1043,11 +1086,44 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
     def _scan_library(self):
         self.btn_scan_library.setEnabled(False)
         self.library_status_label.setText("Taraniyor... (Steam / Epic / GOG / Xbox)")
+        self._show_library_skeleton()
         worker = ScanWorker(scan_all_libraries)
         worker.finished_ok.connect(self._on_library_scan_done)
         worker.finished_error.connect(self._on_library_scan_error)
         self._library_worker = worker  # tarama bitene kadar referansi tut (gc onlemi)
         worker.start()
+
+    def _show_library_skeleton(self, count: int = 12):
+        """Tarama surerken bos beyaz ekran yerine, gercek kartlarin
+        boyutunda soluk-parlak nabiz atan 'iskelet' kartlari gosterir
+        (WeMod/modern uygulamalarin 'skeleton loading' deseni)."""
+        while self.library_grid.count():
+            item = self.library_grid.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        self._library_cards = []
+
+        columns = 6
+        self._skeleton_anims = []
+        for i in range(count):
+            placeholder = QFrame()
+            placeholder.setObjectName("SkeletonCard")
+            placeholder.setFixedSize(GameCard.COVER_W + 24, GameCard.COVER_H + 68)
+            effect = QGraphicsOpacityEffect(placeholder)
+            placeholder.setGraphicsEffect(effect)
+            anim = QPropertyAnimation(effect, b"opacity", placeholder)
+            anim.setDuration(900)
+            anim.setStartValue(0.35)
+            anim.setKeyValueAt(0.5, 0.75)
+            anim.setEndValue(0.35)
+            anim.setLoopCount(-1)
+            anim.setEasingCurve(QEasingCurve.InOutSine)
+            # Kartlar ayni anda "nefes almasin" diye her birinin baslangici
+            # hafifce kaydirilir - daha canli/organik bir dalga hissi verir.
+            QTimer.singleShot(int((i % columns) * 90), anim.start)
+            self._skeleton_anims.append(anim)
+            self.library_grid.addWidget(placeholder, i // columns, i % columns)
 
     def _on_library_scan_done(self, games):
         self.btn_scan_library.setEnabled(True)
@@ -1319,6 +1395,7 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
         self.status_bar.showMessage(f"Bagli: {process_name}")
         self.log(f"Baglanildi: {process_name}")
         show_toast(self, f"Baglanildi: {process_name}", kind="success")
+        self._set_connection_badge(True, process_name)
         if self.engine.base_address is None:
             self.log(
                 "UYARI: module base adresi bulunamadi - pointer zinciri "
@@ -1341,6 +1418,7 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
         self.status_bar.showMessage("Baglanti kesildi.")
         self.log("Baglanti kesildi.")
         show_toast(self, "Baglanti kesildi.", kind="info")
+        self._set_connection_badge(False)
         self._refresh_dashboard()
 
     def _try_autoload_profile(self, process_name):
