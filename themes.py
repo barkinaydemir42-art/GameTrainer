@@ -150,6 +150,25 @@ _STYLESHEET_TEMPLATE = """
     }}
     #VersionLabel {{ color: {text_faint}; font-size: 11px; padding: 10px; }}
 
+    /* ---- Pencere govdesi (frameless - Wand/WeMod tarzi) ----
+       Native baslik cubugu kaldirildigi icin pencerenin masaustunden
+       ayrilmasini saglayan ince bir kenarlik burada eklenir; DWM golgesi
+       (frameless_window.py) bunun uzerine dogal bir derinlik katar. */
+    #WindowRoot {{ border: 1px solid {border}; }}
+
+    #CustomTitleBar {{
+        background-color: {sidebar_bg}; border-bottom: 1px solid {border};
+    }}
+    #TitleBarText {{ color: {text_soft}; font-size: 12px; font-weight: 600; }}
+    #TitleBarButton {{
+        background-color: transparent; color: {text_dim}; border: none;
+        border-radius: 0px; font-size: 13px; font-weight: 600; padding: 0;
+    }}
+    #TitleBarButton:hover {{ background-color: {hover_bg}; color: #ffffff; }}
+    #TitleBarButton:pressed {{ background-color: {checked_bg}; }}
+    #TitleBarCloseButton:hover {{ background-color: #e5484d; color: #ffffff; }}
+    #TitleBarCloseButton:pressed {{ background-color: #c53a3e; }}
+
     /* ---- Ust bar (top bar) ---- */
     #TopBar {{ background-color: {window_bg}; border-bottom: 1px solid {border}; }}
     #SearchBox {{

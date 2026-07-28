@@ -31,9 +31,11 @@ from PyQt5.QtWidgets import (
     QProgressBar, QButtonGroup, QFrame, QSizePolicy, QAbstractItemView,
     QScrollArea, QGraphicsDropShadowEffect, QGridLayout
 )
-from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize
+from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize, QEvent
 from PyQt5.QtGui import QPixmap, QPainter, QColor
 
+from title_bar import CustomTitleBar
+from frameless_window import FramelessResizeMixin, enable_dwm_shadow, enable_rounded_corners
 from memory_engine import (
     MemoryEngine, WatchedAddress, list_processes, list_processes_with_windows, ALL_TYPES,
 )
@@ -220,11 +222,23 @@ class UpdateCheckWorker(QThread):
                 self.download_error.emit(str(e))
 
 
-class LocalTrainerStudio(QMainWindow):
+class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"LocalTrainer Studio v{updater.CURRENT_VERSION} - Merged Edition (Calisan Motor)")
+        window_title = f"LocalTrainer Studio v{updater.CURRENT_VERSION} - Merged Edition (Calisan Motor)"
+        self.setWindowTitle(window_title)
         self.setGeometry(50, 50, 1250, 820)
+        self.setMinimumSize(900, 600)
+
+        # ---- Wand/WeMod tarzi ozel (native olmayan) pencere cercevesi ----
+        # Windows'un varsayilan baslik cubugu kaldiriliyor: koyu temayla
+        # uyusmayan, ust kenarda beliren o cirkin sistem cizgisinin/ayracinin
+        # tek kesin cozumu bu - artik pencerenin tamami ucdan uca kendi
+        # temamizla ciziliyor. Kenarlardan boyutlandirma ve golge/yuvarlak
+        # kose ozellikleri frameless_window.py'de saglaniyor.
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowSystemMenuHint | Qt.WindowMinMaxButtonsHint)
+        self.title_bar = None  # asagida _build_window_root() icinde olusturulur
+        self._window_title_text = window_title
 
         # ---- Gercek backend ----
         self.engine = MemoryEngine()
@@ -242,8 +256,21 @@ class LocalTrainerStudio(QMainWindow):
         self.pending_update = None
         self.update_worker = None
 
+        # ---- Pencere govdesi: [ozel titlebar] ustte, geri kalan icerik altta ----
+        window_root = QWidget()
+        window_root.setObjectName("WindowRoot")
+        self.setCentralWidget(window_root)
+        root_layout = QVBoxLayout(window_root)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        brand_icon_pix = get_pixmap("bolt", color="#ffffff", size=16)
+        self.title_bar = CustomTitleBar(self, self._window_title_text, icon_pixmap=brand_icon_pix)
+        root_layout.addWidget(self.title_bar)
+
         self.central_widget = QWidget()
-        self.setCentralWidget(self.central_widget)
+        self.central_widget.setObjectName("WindowBody")
+        root_layout.addWidget(self.central_widget, 1)
         self.main_layout = QHBoxLayout(self.central_widget)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(0)
@@ -287,6 +314,27 @@ class LocalTrainerStudio(QMainWindow):
             QTimer.singleShot(1500, lambda: self._check_for_updates(silent=True))
 
     # ------------------------------------------------------------------
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Pencere ilk kez gosterildiginde gercek bir HWND'ye sahip olur -
+        # DWM golgesi/yuvarlak kose burada, tek seferlik uygulanir.
+        if not getattr(self, "_dwm_applied", False):
+            self._dwm_applied = True
+            try:
+                hwnd = int(self.winId())
+                enable_dwm_shadow(hwnd)
+                enable_rounded_corners(hwnd)
+            except Exception:
+                pass
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        # Pencere durumu Windows tarafindan degistirildiginde de (ör. Win+Up
+        # ile buyutme, gorev cubugundan geri yukleme) titlebar'daki buyut/geri
+        # yukle ikonu guncel kalsin.
+        if event.type() == QEvent.WindowStateChange and self.title_bar is not None:
+            self.title_bar.sync_max_icon()
+
     def _log_safe(self, message: str):
         self.log(message)
 
