@@ -630,14 +630,27 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
         return bar
 
     def _on_top_search(self, text: str):
-        # Su an icin arama, kayitli profil listesini filtreliyor - Wand'daki
-        # global arama gibi kapsam ilerde genisletilebilir.
-        if not hasattr(self, "dash_profile_list"):
-            return
+        # Wand'daki gibi tek arama kutusu birden fazla yeri filtreler:
+        # kayitli profiller VE oyun kutuphanesi kartlari.
         text = text.strip().lower()
-        for i in range(self.dash_profile_list.count()):
-            item = self.dash_profile_list.item(i)
-            item.setHidden(bool(text) and text not in item.text().lower())
+
+        if hasattr(self, "dash_profile_list"):
+            for i in range(self.dash_profile_list.count()):
+                item = self.dash_profile_list.item(i)
+                item.setHidden(bool(text) and text not in item.text().lower())
+
+        if hasattr(self, "_library_cards"):
+            visible_count = 0
+            for card in self._library_cards:
+                match = (not text) or (text in card.game.name.lower())
+                card.setVisible(match)
+                visible_count += int(match)
+            # Kutuphanedeyken yazarken sonuc sayisini gorunur kilar (WeMod'un
+            # arama sonucu ozetine benzer bir geri bildirim).
+            if hasattr(self, "library_status_label") and text and self._library_games:
+                self.library_status_label.setText(f"\"{text}\" icin {visible_count} sonuc")
+            elif hasattr(self, "library_status_label") and not text and self._library_games:
+                self.library_status_label.setText(f"{len(self._library_games)} oyun bulundu.")
 
     def _apply_shadow(self, widget, blur=28, alpha=130, y_offset=8, color="#000000"):
         """Kartlara hafif bir 'elevation' (golge) hissi verir - Wand/WeMod
@@ -1024,6 +1037,7 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
         layout.addWidget(card, 1)
         self._library_generation = 0
         self._library_cards = []
+        self._library_games = []
         return widget
 
     def _scan_library(self):
