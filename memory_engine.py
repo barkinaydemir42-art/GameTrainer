@@ -63,6 +63,14 @@ SCANNABLE_PROTECT = {PAGE_READWRITE, PAGE_EXECUTE_READWRITE}
 # atlar (yazilamaz oldugu icin "cheat" saklamaya uygun degildir) ama
 # anchor aramasi ozellikle bunlari hedefler.
 CODE_PROTECT = {PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY}
+# Memory Region Filter icin bolge TIPLERI (MEMORY_BASIC_INFORMATION.Type) -
+# yukaridaki protect_set/CODE_PROTECT'ten FARKLI bir eksen: protect_set
+# "okunabilir/yazilabilir/calistirilabilir mi" sorusuna, Type ise "bu bolge
+# exe/dll'in kendi statik bolumu mu (MEM_IMAGE) yoksa oyunun calisirken
+# ayirdigi dinamik heap/yigin mi (MEM_PRIVATE)" sorusuna cevap verir.
+MEM_IMAGE = 0x1000000
+MEM_MAPPED = 0x40000
+MEM_PRIVATE = 0x20000
 
 
 class MEMORY_BASIC_INFORMATION(ctypes.Structure):
@@ -341,6 +349,7 @@ class MemoryEngine:
         self.base_address: Optional[int] = None
         self.base_address_error: Optional[str] = None
         self.module_size: int = 0
+        self.exe_fingerprint: Optional[str] = None
         self._last_results: List[ScanResult] = []
         self.last_scan_truncated: bool = False
         # 'Bilinmeyen ilk deger' tarama modu icin: adres -> onceki byte snapshot
@@ -360,6 +369,7 @@ class MemoryEngine:
         self.base_address = None
         self.base_address_error = None
         self.module_size = 0
+        self.exe_fingerprint: Optional[str] = None
         try:
             mod = pymem.process.module_from_name(self.pm.process_handle, process_name)
             self.base_address = mod.lpBaseOfDll
@@ -369,6 +379,7 @@ class MemoryEngine:
             # 64-bit uyumsuzlugu, izin sorunu). Bu durumda manuel/AOB tarama ve
             # ham adres ekleme calisir ama pointer zinciri (offsets) calismaz.
             self.base_address_error = str(e)
+        self.exe_fingerprint = self.get_exe_fingerprint()
         return True
 
     def detach(self):
@@ -381,6 +392,7 @@ class MemoryEngine:
         self.pm = None
         self.process_name = None
         self.base_address = None
+        self.exe_fingerprint = None
         self._last_results = []
 
     def is_process_alive(self) -> bool:
@@ -477,6 +489,49 @@ class MemoryEngine:
         for off in wa.offsets[1:]:
             addr = self.pm.read_longlong(addr) + off
         return addr
+
+    def verify_pattern_at(self, address: int, pattern: str) -> bool:
+        """Verilen adreste, verilen AOB pattern'i hala eslesiyor mu kontrol
+        eder. Signature Cache dogrulamasi icin kullanilir: tek bir kucuk
+        okuma yapar (ucuzdur), tam bir tarama gerektirmez."""
+        try:
+            pat, mask = _parse_pattern(pattern)
+            if not pat:
+                return False
+            data = self.pm.read_bytes(address, len(pat))
+        except Exception:
+            return False
+        return _match_at(data, 0, pat, mask)
+
+    # ---------------- Oyun Surumu Parmak Izi (Version Checker) ----------------
+    def get_exe_fingerprint(self) -> Optional[str]:
+        """Bagli oldugu process'in ana exe'sinin diskteki boyutu+degisim
+        zamanina dayali ucuz bir 'parmak izi' uretir. Bu, oyun bir surum
+        guncellemesi aldiginda (patch/DLC/Steam guncellemesi) degisir - tam
+        exe'yi (genelde onlarca-yuzlerce MB) hash'lemek yavas olacagi icin
+        bilincli olarak boyut+mtime kombinasyonu tercih edildi; bu ikisi
+        birlikte pratikte bir hash kadar guvenilir bir 'degisti/degismedi'
+        sinyali verir. Kaydedilmis bir profil/cache yuklenirken bu deger
+        farkliysa, kullaniciya 'oyun guncellenmis olabilir, adresler artik
+        gecersiz olabilir' diye uyarmak icin kullanilir.
+
+        NOT: Bu proje ayrica Auto Pointer Repair (anchor_pattern, bkz.
+        asagisi) ile RIP-relative statik pointer'lari OTOMATIK onarabiliyor;
+        bu fingerprint ise DAHA GENIS bir uyari katmanidir - anchor'i
+        olmayan profiller (ham adres/normal offset zinciri) icin de
+        calisir ve struct'in kendisi degisse bile (anchor onaramasa da)
+        kullaniciyi bilgilendirir."""
+        if self.pm is None or not self.process_name:
+            return None
+        try:
+            module = pymem.process.module_from_name(self.pm.process_handle, self.process_name)
+            exe_path = module.filename
+            if not exe_path or not os.path.isfile(exe_path):
+                return None
+            stat = os.stat(exe_path)
+            return f"{stat.st_size}:{int(stat.st_mtime)}"
+        except Exception:
+            return None
 
     # ---------------- Auto Pointer Repair (RIP-relative "anchor") ----------------
     # AMAC: bir pointer zincirinin ILK adimi (module_base + offsets[0]) genelde
@@ -590,12 +645,21 @@ class MemoryEngine:
 
     # ---------------- Bellek bölgelerini tarama (Cheat Engine tarzı) ----------------
 
-    def _enumerate_regions(self, protect_set=None):
+    def _enumerate_regions(self, protect_set=None, region_filter: Optional[str] = None):
         """Process'in bellek bolgelerini dondurur (start, size).
         protect_set verilmezse varsayilan olarak YAZILABILIR/OKUNABILIR
         bolgeler (SCANNABLE_PROTECT) dondurulur - deger/AOB taramasi bunu
         kullanir. Kod (.text) bolgelerini taramak icin (bkz.
-        find_anchor_for_address) protect_set=CODE_PROTECT verilir."""
+        find_anchor_for_address) protect_set=CODE_PROTECT verilir.
+
+        region_filter (Memory Region Filter, protect_set'ten BAGIMSIZ bir
+        ikinci eksen):
+          None       -> bolge tipine bakma (eski davranis, varsayilan)
+          "image"    -> sadece exe/dll'in kendi bolumleri (MEM_IMAGE)
+          "private"  -> sadece heap/yigin gibi dinamik bolgeler (MEM_PRIVATE)
+        Taramayi tek bir bolge tipine daraltmak hem hizlandirir hem de
+        (ozellikle "private" ile) kod bolumlerindeki alakasiz eslesmeleri eler.
+        """
         if protect_set is None:
             protect_set = SCANNABLE_PROTECT
         kernel32 = _configure_kernel32()
@@ -611,14 +675,21 @@ class MemoryEngine:
             )
             if result == 0:
                 break
-            if (
+            step = mbi.RegionSize if mbi.RegionSize else 0x1000
+            is_scannable = (
                 mbi.State == MEM_COMMIT
                 and mbi.Protect in protect_set
                 and not (mbi.Protect & PAGE_GUARD)
                 and mbi.RegionSize > 0
-            ):
+            )
+            type_ok = (
+                region_filter is None
+                or (region_filter == "image" and mbi.Type == MEM_IMAGE)
+                or (region_filter == "private" and mbi.Type == MEM_PRIVATE)
+            )
+            if is_scannable and type_ok:
                 regions.append((mbi.BaseAddress or 0, mbi.RegionSize))
-            address += mbi.RegionSize if mbi.RegionSize else 0x1000
+            address += step
         return regions
 
     def _enumerate_code_regions(self):
@@ -656,14 +727,14 @@ class MemoryEngine:
     # uyarmak icin self.last_scan_truncated bayragini set ederiz.
     MAX_SCAN_RESULTS = 200_000
 
-    def first_scan(self, value, value_type: str) -> List[ScanResult]:
+    def first_scan(self, value, value_type: str, region_filter: Optional[str] = None) -> List[ScanResult]:
         """İlk tarama: verilen değere eşit tüm adresleri bulur."""
         fmt, size = TYPE_MAP[value_type]
         target = struct.pack("<" + fmt, value)
         overlap = size - 1
         results = []
         self.last_scan_truncated = False
-        for base, region_size in self._enumerate_regions():
+        for base, region_size in self._enumerate_regions(region_filter=region_filter):
             for chunk_base, data in self._iter_region_chunks(base, region_size, overlap):
                 start = 0
                 while True:
@@ -725,7 +796,7 @@ class MemoryEngine:
     # orada bir MemoryEngine ORNEGINE (dolayisiyla self.pm'nin Windows handle'ina)
     # erisemez - handle'lar process'e ozeldir, pickle'lanip tasınamaz.
 
-    def pattern_scan(self, pattern: str, max_results: int = 200) -> List[int]:
+    def pattern_scan(self, pattern: str, max_results: int = 200, region_filter: Optional[str] = None) -> List[int]:
         """
         AOB/pattern tarama. Ornek pattern: 'A1 ?? ?? ?? ?? 8B 45 FC'
         Tum yazilabilir/okunabilir bolgeleri tarar, eslesen adresleri dondurur.
@@ -753,14 +824,15 @@ class MemoryEngine:
         shift_table = _build_bmh_shift_table(pat, mask)
         overlap = len(pat) - 1
         found: List[int] = []
-        for base, region_size in self._enumerate_regions():
+        for base, region_size in self._enumerate_regions(region_filter=region_filter):
             for chunk_base, data in self._iter_region_chunks(base, region_size, overlap):
                 if _bmh_find_all(data, pat, mask, shift_table, max_results, found, chunk_base):
                     return found
         return found
 
     def pattern_scan_parallel(
-        self, pattern: str, max_results: int = 200, max_workers: Optional[int] = None
+        self, pattern: str, max_results: int = 200, max_workers: Optional[int] = None,
+        region_filter: Optional[str] = None,
     ) -> List[int]:
         """
         pattern_scan ile AYNI SONUCU (ayni pattern, ayni BMH algoritmasi)
@@ -801,14 +873,14 @@ class MemoryEngine:
 
         try:
             pid = self.pm.process_id
-            regions = self._enumerate_regions()
+            regions = self._enumerate_regions(region_filter=region_filter)
             if not regions:
                 return []
 
             cpu_count = os.cpu_count() or 1
             workers = max_workers or max(1, min(cpu_count, 8, len(regions)))
             if workers <= 1:
-                return self.pattern_scan(pattern, max_results=max_results)
+                return self.pattern_scan(pattern, max_results=max_results, region_filter=region_filter)
 
             region_groups = _split_regions_balanced(regions, workers)
             args_list = [
@@ -830,7 +902,7 @@ class MemoryEngine:
             found.sort()
             return found[:max_results]
         except Exception:
-            return self.pattern_scan(pattern, max_results=max_results)
+            return self.pattern_scan(pattern, max_results=max_results, region_filter=region_filter)
 
     # ---------------- Bilinmeyen Ilk Deger Taramasi ----------------
     # Klasik Cheat Engine "Unknown initial value" ozelligi: kullanici

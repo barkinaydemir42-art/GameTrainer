@@ -37,7 +37,10 @@ from PyQt5.QtGui import QPixmap, QPainter
 from memory_engine import (
     MemoryEngine, WatchedAddress, list_processes, list_processes_with_windows, ALL_TYPES,
 )
-from profile_manager import save_profile, load_profile, profile_exists, list_profiles, PROFILES_DIR
+from profile_manager import (
+    save_profile, load_profile, profile_exists, list_profiles, PROFILES_DIR,
+    save_signature_cache, load_signature_cache,
+)
 from hotkeys import HotkeyManager
 from script_engine import ScriptEngine, ScriptError
 from toggle_switch import ToggleSwitch
@@ -875,6 +878,31 @@ class LocalTrainerStudio(QMainWindow):
         if not data:
             return
         self.current_game_label = data.get("game_label", self.engine.process_name or "")
+
+        # ---- Version Checker: kayitli profil BASKA bir exe surumunde
+        # olusturulmus mu kontrol et. anchor_pattern'i olan cheat'ler Auto
+        # Pointer Repair sayesinde bunu kismen kendiliginden tolere eder,
+        # ama struct'in kendisi (offsets[1:]) degistiyse ya da anchor'suz
+        # ham/normal pointer-zinciri kayitlari varsa bu uyari yine de
+        # onemlidir. ----
+        saved_fp = data.get("exe_fingerprint")
+        current_fp = self.engine.exe_fingerprint
+        if saved_fp and current_fp and saved_fp != current_fp:
+            self.log(
+                "UYARI (Surum Kontrolu): Bu profil oyunun FARKLI bir surumunde "
+                "kaydedilmis. Oyun o zamandan beri guncellenmis olabilir; "
+                "anchor'i olmayan adresler/offsetler artik gecersiz olabilir. "
+                "Sorun yasarsan Scanner ile yeniden tara ve profili tekrar kaydet."
+            )
+            QMessageBox.warning(
+                self, "Surum Uyarisi",
+                f"'{self.current_game_label}' profili oyunun FARKLI bir "
+                "surumunde kaydedilmis (oyun o zamandan beri guncellenmis "
+                "olabilir). Auto Pointer Repair'i olmayan adresler/offsetler "
+                "gecersiz olabilir - sorun yasarsan yeniden tara ve profili "
+                "tekrar kaydet."
+            )
+
         self.watched.clear()
         permanent_count = 0
         temp_count = 0
@@ -1063,6 +1091,20 @@ class LocalTrainerStudio(QMainWindow):
         self.scan_type_combo = QComboBox()
         self.scan_type_combo.addItems(ALL_TYPES)
         row0.addWidget(self.scan_type_combo)
+        self.region_filter_label = QLabel("Bolge:")
+        row0.addWidget(self.region_filter_label)
+        self.region_filter_combo = QComboBox()
+        self.region_filter_combo.addItem("Tumu (varsayilan)", None)
+        self.region_filter_combo.addItem("Sadece Ana Program (Image)", "image")
+        self.region_filter_combo.addItem("Sadece Heap/Dinamik (Private)", "private")
+        self.region_filter_combo.setToolTip(
+            "Memory Region Filter: taramayi belirli bellek bolge tipleriyle\n"
+            "sinirlar - hem hizlandirir hem alakasiz eslesmeleri eler.\n"
+            "'Ana Program (Image)' statik/sabit degerler, 'Heap/Dinamik\n"
+            "(Private)' ise oyuncu can/altin gibi calisirken degisen\n"
+            "degerler icin genelde daha isabetlidir."
+        )
+        row0.addWidget(self.region_filter_combo)
         row0.addWidget(QLabel("Deger:"))
         self.scan_value_edit = QLineEdit(placeholderText="Aranacak/Yeni Deger...")
         row0.addWidget(self.scan_value_edit)
@@ -1181,6 +1223,8 @@ class LocalTrainerStudio(QMainWindow):
         deger girip arar, tipki WeMod/basit trainer arayuzlerindeki gibi."""
         self.scan_type_label.setVisible(checked)
         self.scan_type_combo.setVisible(checked)
+        self.region_filter_label.setVisible(checked)
+        self.region_filter_combo.setVisible(checked)
         self.scan_mode_combo.setVisible(checked)
         self.advanced_unknown_box.setVisible(checked)
         self.advanced_hint_label.setVisible(checked)
@@ -1228,6 +1272,9 @@ class LocalTrainerStudio(QMainWindow):
             self._populate_scan_results, mode=mode,
         )
 
+    def _current_region_filter(self) -> Optional[str]:
+        return self.region_filter_combo.currentData()
+
     def _first_scan(self):
         if not self._require_attached():
             return
@@ -1242,6 +1289,7 @@ class LocalTrainerStudio(QMainWindow):
         self._run_scan_in_background(
             "Taraniyor...", self.engine.first_scan,
             self._populate_scan_results, value, vtype,
+            region_filter=self._current_region_filter(),
         )
 
     def _next_scan(self):
@@ -1365,21 +1413,52 @@ class LocalTrainerStudio(QMainWindow):
             QMessageBox.warning(self, "Uyari", "Bir pattern gir (ornek: A1 ?? ?? ?? ??).")
             return
 
+        # ---- Signature Cache: bu (genel AOB / "Auto Signature Builder")
+        # pattern'i icin daha once bir modul-offset kaydedildiyse ve exe
+        # hala ayni surumdeyse (fingerprint eslesir) VE o adreste pattern
+        # hala eslesiyorsa, tam bir bellek taramasi YAPMADAN aninda sonucu
+        # don. NOT: bu, tekil cheat'lerin KALICI pointer zincirini onaran
+        # Auto Pointer Repair (anchor_pattern) mekanizmasindan AYRIDIR -
+        # burada sadece Scanner sekmesindeki AOB aramasi hizlandiriliyor. ----
+        process_name = self.engine.process_name
+        cached = load_signature_cache(process_name, pattern) if process_name else None
+        if (
+            cached
+            and self.engine.base_address is not None
+            and cached.get("exe_fingerprint") == self.engine.exe_fingerprint
+        ):
+            candidate = self.engine.base_address + cached["module_offset"]
+            if self.engine.verify_pattern_at(candidate, pattern):
+                self.aob_result_list.clear()
+                self.aob_result_list.addItem(hex(candidate))
+                self.status_bar.showMessage("AOB: cache'ten bulundu (tarama atlandi).")
+                self.log(f"AOB cache hit: '{pattern}' -> {hex(candidate)} (tam tarama atlandi).")
+                return
+
+        region_filter = self._current_region_filter()
+
         def on_success(addresses):
             self.aob_result_list.clear()
             for addr in addresses:
                 self.aob_result_list.addItem(hex(addr))
             self.status_bar.showMessage(f"AOB tarama tamamlandi: {len(addresses)} sonuc.")
+            # Ilk sonucu, bir sonraki seferde taramayi atlayabilmek icin
+            # modul-offset olarak cache'le.
+            if addresses and self.engine.base_address is not None and process_name:
+                module_offset = addresses[0] - self.engine.base_address
+                save_signature_cache(process_name, pattern, self.engine.exe_fingerprint, module_offset)
 
         if self.aob_parallel_checkbox.isChecked():
             self._run_scan_in_background(
                 "AOB taraniyor (cok cekirdekli)...",
                 self.engine.pattern_scan_parallel, on_success, pattern, max_results=200,
+                region_filter=region_filter,
             )
         else:
             self._run_scan_in_background(
                 "AOB taraniyor (buyuk bellekte biraz surebilir)...",
                 self.engine.pattern_scan, on_success, pattern, max_results=200,
+                region_filter=region_filter,
             )
 
     def _add_aob_result_to_watchlist(self, item: QListWidgetItem):
@@ -1972,7 +2051,7 @@ class LocalTrainerStudio(QMainWindow):
         )
         if not ok or not label:
             return
-        save_profile(self.engine.process_name, label, self.watched)
+        save_profile(self.engine.process_name, label, self.watched, self.engine.exe_fingerprint)
         self.log(f"Profil kaydedildi: {label}")
         self.status_bar.showMessage(f"Profil kaydedildi: {label}")
         self._refresh_profile_combo()
