@@ -30,9 +30,9 @@ from PyQt5.QtWidgets import (
     QFileDialog, QInputDialog, QCheckBox, QHeaderView, QListWidgetItem,
     QProgressBar, QButtonGroup, QFrame, QSizePolicy, QAbstractItemView,
     QScrollArea, QGraphicsDropShadowEffect, QGridLayout,
-    QSystemTrayIcon, QMenu, QAction
+    QSystemTrayIcon, QMenu, QAction, QGraphicsOpacityEffect
 )
-from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize, QEvent
+from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize, QEvent, QPropertyAnimation, QEasingCurve
 from PyQt5.QtGui import QPixmap, QPainter, QColor, QIcon
 
 from title_bar import CustomTitleBar
@@ -157,9 +157,36 @@ class GameCard(QFrame):
         # Onbellekte zaten indirilmis bir kapak varsa (ag cagrisi
         # yapmadan) hemen goster - sadece yeni/ilk kez gorulen Steam
         # oyunlari icin arka plan indirmesi beklenir.
+        # ---- Hover elevation (WeMod tarzi) ----
+        # Fare kartin uzerine gelince yumusak bir golge/parlama belirir,
+        # ayrilinca soner - kartin "kaldirilabilir" hissi vermesini saglar.
+        self._shadow = QGraphicsDropShadowEffect(self)
+        self._shadow.setOffset(0, 4)
+        self._shadow.setBlurRadius(0)
+        self._shadow.setColor(QColor(124, 92, 255, 0))
+        self.setGraphicsEffect(self._shadow)
+        self._hover_anim = QPropertyAnimation(self._shadow, b"blurRadius", self)
+        self._hover_anim.setDuration(160)
+        self._hover_anim.setEasingCurve(QEasingCurve.OutCubic)
+
         cached = get_cached_cover_path(game)
         if cached:
             self.set_cover(cached)
+
+    def enterEvent(self, event):
+        self._shadow.setColor(QColor(124, 92, 255, 160))
+        self._hover_anim.stop()
+        self._hover_anim.setStartValue(self._shadow.blurRadius())
+        self._hover_anim.setEndValue(24)
+        self._hover_anim.start()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hover_anim.stop()
+        self._hover_anim.setStartValue(self._shadow.blurRadius())
+        self._hover_anim.setEndValue(0)
+        self._hover_anim.start()
+        super().leaveEvent(event)
 
     def _set_placeholder(self):
         """Kapak henuz yokken (indirilene kadar, ya da Steam disi bir
@@ -467,16 +494,51 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
 
         return sidebar
 
+    def _switch_page(self, index: int = None, widget: QWidget = None):
+        """self.pages uzerinde WeMod tarzi kisa bir crossfade ile sayfa
+        degistirir - direkt setCurrentIndex yerine bu kullanilir."""
+        target_index = self.pages.indexOf(widget) if widget is not None else index
+        if target_index is None or target_index == self.pages.currentIndex():
+            if widget is not None:
+                self.pages.setCurrentWidget(widget)
+            elif index is not None:
+                self.pages.setCurrentIndex(index)
+            return
+
+        effect = QGraphicsOpacityEffect(self.pages)
+        self.pages.setGraphicsEffect(effect)
+
+        fade_out = QPropertyAnimation(effect, b"opacity", self.pages)
+        fade_out.setDuration(90)
+        fade_out.setStartValue(1.0)
+        fade_out.setEndValue(0.0)
+        fade_out.setEasingCurve(QEasingCurve.InCubic)
+
+        def _swap_and_fade_in():
+            self.pages.setCurrentIndex(target_index)
+            fade_in = QPropertyAnimation(effect, b"opacity", self.pages)
+            fade_in.setDuration(160)
+            fade_in.setStartValue(0.0)
+            fade_in.setEndValue(1.0)
+            fade_in.setEasingCurve(QEasingCurve.OutCubic)
+            fade_in.finished.connect(lambda: self.pages.setGraphicsEffect(None))
+            fade_in.start()
+            self.pages._fade_in_anim = fade_in  # referansi canli tut
+
+        fade_out.finished.connect(_swap_and_fade_in)
+        fade_out.start()
+        self.pages._fade_out_anim = fade_out  # referansi canli tut
+
     def _nav_clicked(self, key: str):
         if key == "dashboard":
-            self.pages.setCurrentIndex(0)
+            self._switch_page(0)
         elif key == "trainer":
-            self.pages.setCurrentIndex(1)
+            self._switch_page(1)
         elif key == "library":
-            self.pages.setCurrentIndex(2)
+            self._switch_page(2)
         elif key == "settings":
             # "Ayarlar" -> Trainer sayfasina gec ve Guncelleme sekmesini ac
-            self.pages.setCurrentWidget(self.game_tabs)
+            self._switch_page(widget=self.game_tabs)
             if hasattr(self, "sub_tabs"):
                 self.sub_tabs.setCurrentIndex(self.sub_tabs.count() - 1)
         btn = self._nav_key_to_button.get(key)
