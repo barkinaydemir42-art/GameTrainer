@@ -574,6 +574,7 @@ class LocalTrainerStudio(QMainWindow):
         btn_go_wizard.clicked.connect(lambda: self._nav_clicked("trainer"))
         btn_row.addWidget(btn_go_wizard)
         btn_refresh_dash = QPushButton("  Yenile")
+        btn_refresh_dash.setObjectName("SecondaryButton")
         btn_refresh_dash.setObjectName("HeroGhostBtn")
         btn_refresh_dash.setCursor(Qt.PointingHandCursor)
         refresh_icon = get_icon("refresh", color="#ffffff", size=16)
@@ -888,6 +889,8 @@ class LocalTrainerStudio(QMainWindow):
     def create_wizard_tab(self):
         widget = QWidget()
         layout = QHBoxLayout(widget)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(16)
 
         step_list = QListWidget()
         step_list.addItems([
@@ -909,6 +912,7 @@ class LocalTrainerStudio(QMainWindow):
         self.wiz_process_combo.setEditable(True)
         row.addWidget(self.wiz_process_combo)
         btn_refresh = QPushButton("Listeyi Yenile")
+        btn_refresh.setObjectName("SecondaryButton")
         btn_refresh.clicked.connect(self._refresh_process_list)
         row.addWidget(btn_refresh)
         btn_exe = QPushButton(".exe Sec")
@@ -927,6 +931,7 @@ class LocalTrainerStudio(QMainWindow):
         p1.addWidget(btn_attach)
 
         btn_detach = QPushButton("Baglantiyi Kes (Detach)")
+        btn_detach.setObjectName("DangerButton")
         btn_detach.setStyleSheet("background-color: #555555;")
         btn_detach.clicked.connect(self._detach)
         p1.addWidget(btn_detach)
@@ -942,9 +947,11 @@ class LocalTrainerStudio(QMainWindow):
         btn_load_profile.clicked.connect(self._manual_load_profile)
         profile_row.addWidget(btn_load_profile)
         btn_export_profile = QPushButton("Disa Aktar")
+        btn_export_profile.setObjectName("SecondaryButton")
         btn_export_profile.clicked.connect(self._export_profile)
         profile_row.addWidget(btn_export_profile)
         btn_import_profile = QPushButton("Ice Aktar")
+        btn_import_profile.setObjectName("SecondaryButton")
         btn_import_profile.clicked.connect(self._import_profile)
         profile_row.addWidget(btn_import_profile)
         p1.addLayout(profile_row)
@@ -1274,6 +1281,8 @@ class LocalTrainerStudio(QMainWindow):
     def create_scanner_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
         splitter = QSplitter(Qt.Vertical)
 
         # ---- Basit / Gelismis gecisi ----
@@ -1283,6 +1292,7 @@ class LocalTrainerStudio(QMainWindow):
         mode_row.addWidget(self.scan_status_label)
         mode_row.addStretch(1)
         self.btn_toggle_advanced = QPushButton("Gelismis \u25be")
+        self.btn_toggle_advanced.setObjectName("SecondaryButton")
         self.btn_toggle_advanced.setCheckable(True)
         self.btn_toggle_advanced.setToolTip(
             "Tip/mod secimi, Bilinmeyen Ilk Deger taramasi, AOB/Pattern\n"
@@ -1373,6 +1383,7 @@ class LocalTrainerStudio(QMainWindow):
         result_btn_row.addWidget(self.scan_result_label)
         result_btn_row.addStretch()
         btn_bulk_add = QPushButton("Secilenleri Toplu Ekle (Ctrl/Shift ile coklu sec)")
+        btn_bulk_add.setObjectName("SecondaryButton")
         btn_bulk_add.setToolTip(
             "Tabloda birden fazla satiri Ctrl+tik veya Shift+tik ile secip\n"
             "buna bas: hepsi tek seferde, tek isim sorusuyla Freeze Manager'a\n"
@@ -1416,6 +1427,7 @@ class LocalTrainerStudio(QMainWindow):
             "butonla hepsini tek seferde Freeze Manager listesine ekleyebilirsin."
         ))
         btn_aob_bulk_add = QPushButton("Secilenleri Toplu Ekle")
+        btn_aob_bulk_add.setObjectName("SecondaryButton")
         btn_aob_bulk_add.clicked.connect(self._add_selected_aob_results_to_watchlist)
         aob_layout.addWidget(btn_aob_bulk_add)
 
@@ -1694,6 +1706,8 @@ class LocalTrainerStudio(QMainWindow):
     def create_freeze_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
 
         info_label = QLabel("\u26a1 Tek Is Parcacikli Freeze Scheduler Aktif (Dusuk CPU Kullanimi)")
         info_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
@@ -1744,12 +1758,15 @@ class LocalTrainerStudio(QMainWindow):
         btn_change_type.clicked.connect(self._change_type_for_selected)
         btn_row.addWidget(btn_change_type)
         btn_remove = QPushButton("Sec: Sil")
+        btn_remove.setObjectName("DangerButton")
         btn_remove.clicked.connect(self._remove_selected)
         btn_row.addWidget(btn_remove)
         btn_unfreeze_all = QPushButton("Tumunu Coz")
+        btn_unfreeze_all.setObjectName("SecondaryButton")
         btn_unfreeze_all.clicked.connect(self._unfreeze_all)
         btn_row.addWidget(btn_unfreeze_all)
         btn_clear_all = QPushButton("Tumunu Sil")
+        btn_clear_all.setObjectName("DangerButton")
         btn_clear_all.setStyleSheet("background-color: #B71C1C;")
         btn_clear_all.clicked.connect(self._clear_all_watched)
         btn_row.addWidget(btn_clear_all)
@@ -2273,6 +2290,8 @@ class LocalTrainerStudio(QMainWindow):
     def create_patch_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
 
         patch_box = QGroupBox("Memory Patcher (Restore Destekli)")
         p_layout = QVBoxLayout(patch_box)
@@ -2293,6 +2312,7 @@ class LocalTrainerStudio(QMainWindow):
         btn_nop.setToolTip("Yeni Bytelar kutusunu yoksayar, Adres'ten itibaren N byte'i 0x90 (NOP) ile doldurur.")
         btn_nop.clicked.connect(self._apply_nop_fill)
         btn_undo = QPushButton("Geri Al (Restore Original Bytes)")
+        btn_undo.setObjectName("SecondaryButton")
         btn_undo.setStyleSheet("background-color: #B71C1C; color: white;")
         btn_undo.clicked.connect(self._undo_patch)
         r3.addWidget(btn_patch)
@@ -2379,6 +2399,8 @@ class LocalTrainerStudio(QMainWindow):
     def create_script_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
         layout.addWidget(QLabel(
             "Kisitli Script Motoru (guvenlik icin sadece asagidaki komutlari destekler):\n"
             "  isim = ScanPattern('A1 ?? ?? ?? ??')   |   Freeze(isim, deger)\n"
@@ -2418,6 +2440,8 @@ class LocalTrainerStudio(QMainWindow):
     def create_update_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
 
         appearance_box = QGroupBox("Gorunum")
         appearance_v = QHBoxLayout(appearance_box)

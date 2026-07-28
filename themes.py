@@ -223,47 +223,145 @@ _STYLESHEET_TEMPLATE = """
         font-weight: 800; border-radius: 8px; padding: 2px 7px;
     }}
 
-    /* ---- Sekmeler (tabs) ---- */
-    QTabWidget::pane {{ border: 1px solid {border}; background-color: {pane_bg}; border-radius: 6px; }}
-    QTabBar::tab {{
-        background-color: {surface}; color: {text_muted}; padding: 8px 18px;
-        margin-right: 3px; border-top-left-radius: 6px; border-top-right-radius: 6px;
+    /* ---- Sekmeler (tabs) - "pill" / segmented gorunum ---- */
+    QTabWidget::pane {{
+        border: 1px solid {border}; background-color: {pane_bg};
+        border-radius: 10px; top: 4px;
     }}
-    QTabBar::tab:selected {{ background-color: {accent}; color: #ffffff; font-weight: bold; }}
-    QTabBar::tab:hover {{ background-color: {border}; color: #ffffff; }}
+    QTabWidget::tab-bar {{ left: 4px; alignment: left; }}
+    QTabBar::tab {{
+        background-color: transparent; color: {text_muted}; padding: 9px 20px;
+        margin-right: 4px; margin-top: 2px; border-radius: 8px; font-weight: 600;
+    }}
+    QTabBar::tab:selected {{ background-color: {accent}; color: #ffffff; }}
+    QTabBar::tab:!selected:hover {{ background-color: {hover_bg}; color: #ffffff; }}
 
     QTableWidget, QTextEdit, QListWidget {{
         background-color: {table_bg}; color: #ffffff;
-        border: 1px solid {border}; border-radius: 6px; gridline-color: {border};
+        border: 1px solid {border}; border-radius: 8px; gridline-color: {border};
+        selection-background-color: {accent}; selection-color: #ffffff;
+        alternate-background-color: {surface};
     }}
+    QTableWidget::item, QListWidget::item {{ padding: 4px; border: none; }}
+    QTableWidget {{ padding: 2px; }}
     QHeaderView::section {{
-        background-color: {surface}; color: #ffffff; padding: 6px;
-        border: 1px solid {border}; font-weight: bold;
+        background-color: {surface}; color: {text_soft}; padding: 8px 6px;
+        border: none; border-bottom: 1px solid {border}; font-weight: 700;
     }}
+    QHeaderView::section:first {{ border-top-left-radius: 8px; }}
+    QHeaderView::section:last {{ border-top-right-radius: 8px; }}
+    QTableCornerButton::section {{ background-color: {surface}; border: none; }}
+
+    /* Birincil eylem (varsayilan) */
     QPushButton {{
-        background-color: {accent}; color: white; border-radius: 6px;
-        padding: 7px 16px; font-weight: 600; border: none;
+        background-color: {accent}; color: white; border-radius: 7px;
+        padding: 8px 16px; font-weight: 600; border: none;
     }}
     QPushButton:hover {{ background-color: {accent_hover}; }}
     QPushButton:pressed {{ background-color: {accent_pressed}; }}
+    QPushButton:disabled {{ background-color: {surface}; color: {text_faint}; }}
+
+    /* Ikincil / durgun eylemler icin: btn.setObjectName("SecondaryButton") */
+    #SecondaryButton {{
+        background-color: {surface}; color: {text_soft};
+        border: 1px solid {input_border};
+    }}
+    #SecondaryButton:hover {{ background-color: {hover_bg}; border-color: {accent}; color: #ffffff; }}
+    #SecondaryButton:pressed {{ background-color: {checked_bg}; }}
+    #SecondaryButton:checked {{ background-color: {accent}; color: #ffffff; border-color: {accent}; }}
+
+    /* Tehlikeli/geri alma eylemleri icin: btn.setObjectName("DangerButton") */
+    #DangerButton {{ background-color: transparent; color: #ff6b6b; border: 1px solid #ff6b6b55; }}
+    #DangerButton:hover {{ background-color: #ff6b6b22; border-color: #ff6b6b; }}
+
     QLineEdit, QComboBox {{
         background-color: {surface}; border: 1px solid {input_border};
-        padding: 6px; color: white; border-radius: 5px;
+        padding: 7px 9px; color: white; border-radius: 6px;
+        selection-background-color: {accent};
     }}
+    QLineEdit:hover, QComboBox:hover {{ border: 1px solid {text_faint}; }}
     QLineEdit:focus, QComboBox:focus {{ border: 1px solid {accent}; }}
-    QGroupBox {{
-        border: 1px solid {border}; margin-top: 15px; font-weight: bold;
-        color: {accent_soft}; border-radius: 6px; padding-top: 10px;
+    QLineEdit:disabled, QComboBox:disabled {{ color: {text_faint}; background-color: {pane_bg}; }}
+
+    QComboBox::drop-down {{ border: none; width: 22px; }}
+    QComboBox::down-arrow {{
+        width: 8px; height: 8px; border: none;
+        image: none; background: {text_dim};
     }}
-    QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 5px; }}
-    QListWidget::item {{ padding: 6px; border-radius: 4px; }}
+    QComboBox QAbstractItemView {{
+        background-color: {surface}; color: #ffffff; border: 1px solid {border};
+        border-radius: 8px; outline: none; padding: 4px;
+        selection-background-color: {accent}; selection-color: #ffffff;
+    }}
+
+    QGroupBox {{
+        background-color: {card_bg};
+        border: 1px solid {border}; margin-top: 14px; font-weight: 700;
+        font-size: 12.5px; color: {accent_soft}; border-radius: 10px;
+        padding: 16px 12px 12px 12px;
+    }}
+    QGroupBox::title {{
+        subcontrol-origin: margin; subcontrol-position: top left;
+        left: 12px; top: 2px; padding: 2px 8px;
+        background-color: {surface}; border-radius: 6px;
+    }}
+    QListWidget::item {{ padding: 7px 8px; border-radius: 5px; margin: 1px 2px; }}
     QListWidget::item:selected {{ background-color: {accent}; color: white; }}
-    QStatusBar {{ background-color: {accent}; color: white; font-weight: bold; }}
+    QListWidget::item:hover:!selected {{ background-color: {hover_bg}; }}
+
+    /* ---- Checkbox / Radio ---- */
+    QCheckBox, QRadioButton {{ spacing: 8px; color: {text_soft}; padding: 2px 0; }}
+    QCheckBox::indicator, QRadioButton::indicator {{
+        width: 16px; height: 16px; border: 1px solid {input_border};
+        background-color: {surface}; border-radius: 4px;
+    }}
+    QRadioButton::indicator {{ border-radius: 8px; }}
+    QCheckBox::indicator:hover, QRadioButton::indicator:hover {{ border-color: {accent}; }}
+    QCheckBox::indicator:checked, QRadioButton::indicator:checked {{
+        background-color: {accent}; border-color: {accent};
+    }}
+
+    QStatusBar {{
+        background-color: {surface}; color: {text_muted};
+        border-top: 1px solid {border}; font-weight: 600; padding: 2px 6px;
+    }}
+    QStatusBar::item {{ border: none; }}
     QProgressBar {{
         background-color: {surface}; border: 1px solid {border};
-        border-radius: 5px; text-align: center; color: white;
+        border-radius: 6px; text-align: center; color: white; min-height: 16px;
     }}
-    QProgressBar::chunk {{ background-color: {accent}; border-radius: 5px; }}
+    QProgressBar::chunk {{ background-color: {accent}; border-radius: 6px; }}
+
+    QSplitter::handle {{ background-color: {border}; }}
+    QSplitter::handle:horizontal {{ width: 3px; margin: 2px 0; }}
+    QSplitter::handle:vertical {{ height: 3px; margin: 0 2px; }}
+    QSplitter::handle:hover {{ background-color: {accent}; }}
+
+    QToolTip {{
+        background-color: {surface}; color: #ffffff; border: 1px solid {border};
+        padding: 6px 9px; border-radius: 6px; font-size: 12px;
+    }}
+
+    QScrollBar:vertical {{ background: transparent; width: 11px; margin: 2px; }}
+    QScrollBar::handle:vertical {{
+        background: {input_border}; border-radius: 4px; min-height: 24px;
+    }}
+    QScrollBar::handle:vertical:hover {{ background: {accent}; }}
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}
+
+    QScrollBar:horizontal {{ background: transparent; height: 11px; margin: 2px; }}
+    QScrollBar::handle:horizontal {{
+        background: {input_border}; border-radius: 4px; min-width: 24px;
+    }}
+    QScrollBar::handle:horizontal:hover {{ background: {accent}; }}
+    QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
+    QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ background: none; }}
+
+    QDockWidget {{ color: {text_soft}; font-weight: 700; titlebar-close-icon: none; }}
+    QDockWidget::title {{
+        background-color: {surface}; padding: 7px 10px; border-bottom: 1px solid {border};
+    }}
 
     /* ---- Oyun Kutuphanesi kartlari ---- */
     #LibraryScroll {{ border: none; background: transparent; }}
