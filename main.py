@@ -32,7 +32,7 @@ from PyQt5.QtWidgets import (
     QScrollArea, QGraphicsDropShadowEffect, QGridLayout,
     QSystemTrayIcon, QMenu, QAction, QGraphicsOpacityEffect
 )
-from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize, QEvent, QPropertyAnimation, QEasingCurve
+from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize, QEvent, QPropertyAnimation, QEasingCurve, QRect
 from PyQt5.QtGui import QPixmap, QPainter, QColor, QIcon
 
 from title_bar import CustomTitleBar
@@ -492,7 +492,40 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
         version_lbl.setAlignment(Qt.AlignCenter)
         layout.addWidget(version_lbl)
 
+        # ---- Kayan aktif-oge gostergesi (WeMod tarzi) ----
+        # Layout'un DISINDA, sidebar'in dogrudan cocugu olarak eklenir ki
+        # elle konumlandirip (setGeometry) buton degisince yumusakca
+        # kaydirabilelim - QVBoxLayout'taki normal bir widget boyle
+        # serbestce hareket ettirilemez.
+        self.nav_indicator = QFrame(sidebar)
+        self.nav_indicator.setObjectName("NavIndicator")
+        self.nav_indicator.setFixedWidth(3)
+        self._nav_indicator_anim = None
+        # Butonlarin gercek geometrisi ilk layout gecisinden SONRA belli
+        # olur - bu yuzden ilk konumlandirma bir sonraki event loop
+        # turuna erteleniyor (animasyonsuz).
+        QTimer.singleShot(0, lambda: self._position_nav_indicator(self.nav_buttons[0], animate=False))
+
         return sidebar
+
+    def _position_nav_indicator(self, btn: QPushButton, animate: bool = True):
+        """Kayan gostergeyi verilen nav butonunun hizasina tasir.
+        `animate=False` ilk yerlesim icin (aninda), sonrasi hep animasyonlu."""
+        if not hasattr(self, "nav_indicator"):
+            return
+        target = QRect(2, btn.y() + 6, 3, btn.height() - 12)
+        if not animate or self.nav_indicator.geometry().height() == 0:
+            self.nav_indicator.setGeometry(target)
+            self.nav_indicator.show()
+            self.nav_indicator.raise_()
+            return
+        anim = QPropertyAnimation(self.nav_indicator, b"geometry", self.nav_indicator)
+        anim.setDuration(220)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+        anim.setStartValue(self.nav_indicator.geometry())
+        anim.setEndValue(target)
+        anim.start()
+        self._nav_indicator_anim = anim  # referansi canli tut
 
     def _switch_page(self, index: int = None, widget: QWidget = None):
         """self.pages uzerinde WeMod tarzi kisa bir crossfade ile sayfa
@@ -544,6 +577,7 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
         btn = self._nav_key_to_button.get(key)
         if btn is not None:
             btn.setChecked(True)
+            self._position_nav_indicator(btn)
 
     # ------------------------------------------------------------------
     # UST BAR (arama + hizli eylemler) - wand/wemod tarzi

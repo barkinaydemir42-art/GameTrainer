@@ -148,6 +148,7 @@ _STYLESHEET_TEMPLATE = """
     #NavButton:checked {{
         background-color: {checked_bg}; color: #ffffff;
     }}
+    #NavIndicator {{ background-color: {accent}; border-radius: 1px; }}
     #VersionLabel {{ color: {text_faint}; font-size: 11px; padding: 10px; }}
 
     /* ---- Pencere govdesi (frameless - Wand/WeMod tarzi) ----
