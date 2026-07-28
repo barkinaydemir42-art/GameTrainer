@@ -1076,6 +1076,44 @@ class MemoryEngine:
                             break
         return chains
 
+    def rescan_pointer_chains(
+        self, chains: List[List[int]], target_address: int
+    ) -> List[List[int]]:
+        """
+        Cheat Engine'deki "pointer scan sonrasi rescan" adiminin karsiligi.
+
+        find_pointers_to() genelde onlarca/yuzlerce ADAY zincir dondurur -
+        bunlarin cogu o ANKI oyun oturumuna ozel tesadufi eslesmelerdir,
+        gercekten KALICI degildir. Gercek pointer'i bulmanin klasik yontemi:
+        1) Bir aday listesi bul (bu oturumda).
+        2) Oyunu KAPAT, yeniden AC (veya seviye degistir), ayni degeri
+           TEKRAR bul (yeni ham adres farkli olacaktir - ASLR/yeniden
+           allocate).
+        3) Her adayi bu YENI process'te coz; sadece hala dogru (yeni) hedef
+           adrese ulasanlari tut - digerleri elenir.
+
+        Bu fonksiyon adim 3'u yapar: verilen aday zincirlerin HER BIRINI
+        (o an attach edilmis process uzerinde) coz, sadece target_address'e
+        esit sonuc verenleri dondurur. Genelde tek bir cagriyla adaylari
+        yuzlerden 1-2'ye indirir; hala birden fazla kalirsa fonksiyon
+        tekrar tekrar (baska bir yeniden baslatmadan sonra) cagrilabilir.
+        """
+        if not chains:
+            return []
+        if self.base_address is None:
+            raise ValueError(
+                "Bu process icin module base adresi yok, daraltma yapilamaz."
+            )
+        valid = []
+        for chain in chains:
+            try:
+                resolved = self.resolve_pointer_chain(chain)
+            except Exception:
+                continue
+            if resolved == target_address:
+                valid.append(chain)
+        return valid
+
     # ---------------- Byte-level patch / undo ----------------
 
     def apply_byte_patch(self, address: int, new_bytes: bytes) -> bytes:

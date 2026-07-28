@@ -274,6 +274,11 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
         self.hotkeys = HotkeyManager()
         self.script_engine = ScriptEngine(self.engine, on_log=self._log_safe)
         self.watched: list[WatchedAddress] = []
+        # 'Pointer Zinciri Bul' ile bulunan TUM aday zincirleri (secilen tek
+        # zincir wa.offsets'e atansa bile) burada saklanir - "Adaylari
+        # Daralt" (rescan) ozelligi, oyun yeniden baslatildiktan sonra bu
+        # adaylari yeniden dogrulayabilmek icin bunlara ihtiyac duyar.
+        self._pointer_scan_candidates: dict = {}
         self.current_game_label = ""
         self.byte_patches: dict[int, bytes] = {}  # address -> orijinal bytelar (undo icin)
 
@@ -2083,6 +2088,16 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
         )
         btn_pointer_scan.clicked.connect(self._find_pointer_chain_for_selected)
         btn_row.addWidget(btn_pointer_scan)
+        self.btn_narrow_pointer = btn_narrow_pointer = QPushButton("Sec: Pointer Adaylarini Daralt")
+        btn_narrow_pointer.setToolTip(
+            "'Pointer Zinciri Bul' onlarca aday bulup secmeni istediyse ve\n"
+            "hangisinin gercekten kalici oldugundan emin degilsen: OYUNU\n"
+            "KAPAT-AC (veya seviye degistir), degeri TEKRAR bul, yeni ham\n"
+            "adresi buraya gir - sadece o adrese hala ulasan adaylar kalir\n"
+            "(Cheat Engine'deki 'rescan' adiminin karsiligi)."
+        )
+        btn_narrow_pointer.clicked.connect(self._narrow_pointer_candidates_for_selected)
+        btn_row.addWidget(btn_narrow_pointer)
         self.btn_find_anchor = btn_find_anchor = QPushButton("Sec: Anchor Bul (Auto-Repair)")
         btn_find_anchor.setToolTip(
             "Zaten kalici pointer zincirine sahip bir cheat icin, o statik\n"
@@ -2297,6 +2312,9 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
                     "Cheat Engine'de manuel pointer scan yapman gerekebilir."
                 )
                 return
+            # Secilen tek zincir disinda TUM adaylari sakla - "Daralt"
+            # ozelligi bunlarin hepsini bir sonraki oturumda tekrar test eder.
+            self._pointer_scan_candidates[id(wa)] = list(chains)
             labels = [f"{i+1}) offsets={chain}" for i, chain in enumerate(chains[:50])]
             label, ok2 = QInputDialog.getItem(
                 self, "Pointer Zinciri Sec",
@@ -2310,15 +2328,107 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
             wa.offsets = chains[chosen_idx]
             self.log(f"'{wa.name}' icin kalici pointer zinciri atandi: {wa.offsets}")
             self._refresh_freeze_table()
+            extra = ""
+            if len(chains) > 1:
+                extra = (
+                    "\n\nNot: birden fazla aday vardi, secimin YANLIS da olabilir.\n"
+                    "Emin olmak icin: oyunu kapat-ac, degeri tekrar bul, sonra\n"
+                    "'Pointer Adaylarini Daralt' ile dogrula."
+                )
             QMessageBox.information(
                 self, "Basarili",
                 f"'{wa.name}' artik kalici bir pointer zinciri kullaniyor.\n"
-                "Bunu koru diye 'Profili Kaydet'e basmayi unutma."
+                "Bunu koru diye 'Profili Kaydet'e basmayi unutma." + extra
             )
 
         self._run_scan_in_background(
             "Pointer zinciri araniyor (arayuz yanit vermeye devam edecek)...",
             self.engine.find_pointers_to, on_success, wa.address, max_level=max_level,
+        )
+
+    def _narrow_pointer_candidates_for_selected(self):
+        """
+        Cheat Engine'deki pointer scan 'rescan' adiminin karsiligi.
+
+        Akis:
+        1) Daha once 'Pointer Zinciri Bul' ile bu cheat icin saklanmis
+           aday zincirler var mi kontrol eder.
+        2) Kullanicidan, oyunu KAPATIP-ACTIKTAN (veya seviye degistirdikten)
+           SONRA aynen ayni deger icin TEKRAR bulunan YENI ham adresi ister.
+        3) Her adayi (su an attach edilmis - muhtemelen YENIDEN baslatilmis
+           process uzerinde) coz, sadece bu yeni adrese ulasanlari tutar.
+        4) Tek aday kalirsa dogrudan atar; birden fazla kalirsa yine
+           secim penceresi acar (ve azalan yeni aday listesini saklamaya
+           devam eder - istenirse tekrar tekrar daraltilabilir).
+        """
+        idx = self._selected_watched_index()
+        if idx is None:
+            QMessageBox.information(self, "Bilgi", "Once listeden bir satir sec.")
+            return
+        wa = self.watched[idx]
+        candidates = self._pointer_scan_candidates.get(id(wa))
+        if not candidates:
+            QMessageBox.information(
+                self, "Aday Yok",
+                f"'{wa.name}' icin saklanmis pointer adayi yok.\n"
+                "Once 'Pointer Zinciri Bul' ile bir tarama yap."
+            )
+            return
+        if not self._require_attached():
+            return
+
+        addr_str, ok = QInputDialog.getText(
+            self, "Yeni Ham Adres",
+            "Oyunu kapatip actiktan (veya seviye degistirdikten) SONRA,\n"
+            "ayni degeri Scanner'da tekrar bul ve o YENI ham adresi buraya\n"
+            "hex olarak gir (ornek: 0x1A2B3C4D):"
+        )
+        if not ok or not addr_str:
+            return
+        try:
+            new_target = int(addr_str, 16)
+        except ValueError:
+            QMessageBox.warning(self, "Uyari", "Gecersiz hex adres.")
+            return
+
+        def on_success(narrowed):
+            self.status_bar.showMessage("Hazir.")
+            if not narrowed:
+                QMessageBox.warning(
+                    self, "Hicbiri Dogrulanamadi",
+                    f"Onceki {len(candidates)} adayin HICBIRI bu yeni adrese\n"
+                    "ulasmiyor. Muhtemel sebepler: yanlis adres girildi, ya da\n"
+                    "gercek pointer ilk taramada bulunamadi (Detayli/2 seviye\n"
+                    "ile 'Pointer Zinciri Bul'u tekrar dene)."
+                )
+                return
+            self._pointer_scan_candidates[id(wa)] = narrowed
+            if len(narrowed) == 1:
+                wa.offsets = narrowed[0]
+                self.log(f"'{wa.name}' pointer zinciri daraltmayla dogrulandi: {wa.offsets}")
+                self._refresh_freeze_table()
+                QMessageBox.information(
+                    self, "Dogrulandi",
+                    f"'{wa.name}' icin TEK bir gecerli zincir kaldi - atandi.\n"
+                    "Bunu koru diye 'Profili Kaydet'e basmayi unutma."
+                )
+                return
+            labels = [f"{i+1}) offsets={chain}" for i, chain in enumerate(narrowed[:50])]
+            label, ok2 = QInputDialog.getItem(
+                self, "Daraltilmis Adaylar",
+                f"{len(candidates)} adaydan {len(narrowed)} tanesi hala gecerli.\n"
+                "Hala birden fazlaysa tekrar daraltabilirsin. Birini sec:",
+                labels, editable=False,
+            )
+            if not ok2:
+                return
+            wa.offsets = narrowed[labels.index(label)]
+            self.log(f"'{wa.name}' icin daraltilmis pointer zinciri atandi: {wa.offsets}")
+            self._refresh_freeze_table()
+
+        self._run_scan_in_background(
+            "Adaylar dogrulaniyor...",
+            self.engine.rescan_pointer_chains, on_success, candidates, new_target,
         )
 
     def _find_anchor_for_selected(self):
