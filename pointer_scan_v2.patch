@@ -1,0 +1,240 @@
+--- orig/memory_engine.py	2026-07-28 06:18:02.000000000 +0000
++++ GameTrainer-main/memory_engine.py	2026-07-28 06:34:21.538524388 +0000
+@@ -6,6 +6,7 @@
+ Gereksinim: pip install pymem psutil
+ """
+ 
++import bisect
+ import ctypes
+ import os
+ import struct
+@@ -100,6 +101,8 @@
+         ctypes.c_size_t,
+     ]
+     kernel32.VirtualQueryEx.restype = ctypes.c_size_t
++    kernel32.IsWow64Process.argtypes = [wintypes.HANDLE, ctypes.POINTER(ctypes.c_bool)]
++    kernel32.IsWow64Process.restype = wintypes.BOOL
+     return kernel32
+ 
+ 
+@@ -976,53 +979,90 @@
+         self._last_results = results
+         return results
+ 
+-    # ---------------- Pointer Scan Yardimcisi ----------------
++    # ---------------- Pointer Scan Yardimcisi (v2 - indeksli) ----------------
+     # Cheat Engine'deki "Pointer scan for this address" ozelliginin
+     # basitlestirilmis bir surumu. Amac: bulunan HAM (ASLR'a bagli) bir
+     # adres icin, oyun yeniden baslatilsa da GECERLI kalacak statik bir
+     # "modul_base + offset (+ offset...)" zinciri onermek.
+     #
+-    # Yontem: bellekte, DEGERI hedef adrese yakin (target - [0, max_offset]
+-    # araliginda) olan 8-byte'lik "pointer benzeri" konumlari arar. Boyle
+-    # bir konum modulun statik alani icindeyse (base_address..base+size),
+-    # dogrudan kullanilabilir kalici bir pointer'dir. Degilse (level 2),
+-    # o konuma isaret eden BASKA bir statik pointer aranir.
++    # ONCEKI SURUMDEKI PERFORMANS SORUNU: her seviye icin bellek TEKRAR
++    # taraniyordu. Level-2'de bu, "level1'deki her aday icin TUM bellegi
++    # yeniden tara" anlamina geliyordu (O(aday_sayisi * bellek_boyutu)) -
++    # bu yuzden aday sayisi elle 12'yle sinirlanmis, seviye 3+ pratikte
++    # imkansiz hale gelmisti.
+     #
+-    # NOT: Bu, gercek Cheat Engine pointer scanner'i kadar kapsamli degildir
+-    # (o, milyonlarca olasiligi saatler suren bir islemle elemektedir).
+-    # Burada max_level=2 ile sinirli, pratik bir yardimci sunuluyor.
++    # YENI YONTEM (bkz. _build_pointer_map): bellek SADECE BIR KEZ taranir.
++    # "Pointer gibi gorunen" (degeri, taranan adres araligi icine dusen)
++    # her (adres, deger) cifti toplanir ve DEGERE gore siralanir. Bundan
++    # sonraki her seviye, bu hazir tabloda bisect (ikili arama) ile O(log n)
++    # zamanda yapilir - bellege TEKRAR erisilmez. Bu, gercek Cheat Engine'in
++    # ".ptr" pointermap dosyasiyla yaptigi seyin basitlestirilmis, bellek-ici
++    # bir hali. Sonuc: level 3-4 artik pratikte kullanilabilir.
+ 
+     POINTER_SCAN_MAX_OFFSET_DEFAULT = 0x2000  # struct icinde aranacak azami offset
+     POINTER_SCAN_ALIGNMENT = 8  # pointerlar genelde 8-byte hizali (64-bit)
++    POINTER_SCAN_FRONTIER_CAP = 400  # her seviyede genisletilecek azami aday
+ 
+-    def _find_pointer_candidates(
+-        self, target_value: int, max_offset: int, max_results: int = 20000
+-    ) -> List[Tuple[int, int]]:
+-        """
+-        Bellekte, okunan 8-byte deger (pointer sanilan) 'target_value - max_offset'
+-        ile 'target_value' arasinda olan konumlari bulur.
+-        Donen: [(pointer_in_adresi, o_adresteki_deger), ...]
++    def _is_target_32bit(self) -> bool:
++        """Hedef process 32-bit mi (WOW64 altinda mi) calisiyor - pointer
++        genisligini (4 vs 8 byte) otomatik secmek icin kullanilir."""
++        try:
++            kernel32 = _configure_kernel32()
++            is_wow64 = ctypes.c_bool(False)
++            kernel32.IsWow64Process(self.pm.process_handle, ctypes.byref(is_wow64))
++            return bool(is_wow64.value)
++        except Exception:
++            return False
++
++    def _build_pointer_map(self, pointer_width: Optional[int] = None):
+         """
+-        lower = max(target_value - max_offset, 0)
+-        upper = target_value
+-        results = []
+-        alignment = self.POINTER_SCAN_ALIGNMENT
+-        for base, region_size in self._enumerate_regions():
+-            for chunk_base, data in self._iter_region_chunks(base, region_size, 7):
+-                limit = len(data) - 8
++        Taranabilir tum bellegi TEK GECISTE okur, hizalanmis her konumdaki
++        degerin taranan adres araligina (min_addr..max_addr) dusup dusmedigine
++        bakar - dusuyorsa "pointer gibi" kabul edilir. Donen liste DEGERE
++        GORE siralidir, boylece _pointer_map_candidates() bisect ile O(log n)
++        araligi bulabilir.
++
++        Donen: (values, addrs, min_addr, max_addr) - values[i] konumundaki
++        adres addrs[i]'dir (deger sirasina gore esli iki liste).
++        """
++        if pointer_width is None:
++            pointer_width = 4 if self._is_target_32bit() else 8
++        fmt = "<I" if pointer_width == 4 else "<Q"
++        regions = self._enumerate_regions()
++        if not regions:
++            return [], [], 0, 0
++        min_addr = min(b for b, _ in regions)
++        max_addr = max(b + s for b, s in regions)
++
++        entries: List[Tuple[int, int]] = []  # (value, addr) - sonradan deger'e gore siralanir
++        for base, region_size in regions:
++            for chunk_base, data in self._iter_region_chunks(base, region_size, pointer_width - 1):
++                limit = len(data) - pointer_width
+                 pos = 0
+                 while pos <= limit:
+-                    val = struct.unpack_from("<Q", data, pos)[0]
+-                    if lower <= val <= upper:
+-                        results.append((chunk_base + pos, val))
+-                        if len(results) >= max_results:
+-                            return results
+-                    pos += alignment
+-        return results
++                    val = struct.unpack_from(fmt, data, pos)[0]
++                    if min_addr <= val < max_addr:
++                        entries.append((val, chunk_base + pos))
++                    pos += pointer_width
++        entries.sort(key=lambda t: t[0])
++        values = [v for v, _ in entries]
++        addrs = [a for _, a in entries]
++        return values, addrs, min_addr, max_addr
++
++    @staticmethod
++    def _pointer_map_candidates(values: List[int], addrs: List[int], target: int, max_offset: int):
++        """values/addrs (deger'e gore sirali) icinde deger araligi
++        [target-max_offset, target] olanlari bisect ile bulur.
++        Donen: [(pointer_konum_adresi, o_konumdaki_deger), ...]"""
++        lower = max(target - max_offset, 0)
++        lo = bisect.bisect_left(values, lower)
++        hi = bisect.bisect_right(values, target)
++        return [(addrs[i], values[i]) for i in range(lo, hi)]
+ 
+     def find_pointers_to(
+         self, target_address: int, max_level: int = 2,
+         max_offset: int = None, max_results: int = 50,
++        pointer_width: Optional[int] = None,
+     ) -> List[List[int]]:
+         """
+         target_address'e ulasan olasi KALICI offset zincirlerini bulmaya
+@@ -1031,6 +1071,9 @@
+ 
+         Ornek donus: [[0x1A2B30, 0x8], [0x1A2B30, 0x10, 0x28], ...]
+         Bunlarin her biri profile 'offsets' alanina yazilabilir.
++
++        pointer_width: 8 (64-bit, varsayilan) veya 4 (32-bit oyun). None
++        verilirse process'in WOW64 durumuna bakilarak otomatik secilir.
+         """
+         if self.base_address is None:
+             raise ValueError(
+@@ -1041,39 +1084,35 @@
+         module_start = self.base_address
+         module_end = self.base_address + (self.module_size or 0x10000000)
+ 
++        # Bellek TEK SEFER taranir - asagidaki tum seviyeler bu hazir
++        # tabloyu (bisect ile) kullanir, bellege bir daha gidilmez.
++        values, addrs, _, _ = self._build_pointer_map(pointer_width=pointer_width)
++        if not values:
++            return []
++
+         chains: List[List[int]] = []
++        # frontier: (henuz statik koke baglanmamis adres, o noktadan
++        # target'a kadarki offset zinciri (dogru sirada, ilk eleman haric))
++        frontier: List[Tuple[int, List[int]]] = [(target_address, [])]
+ 
+-        level1 = self._find_pointer_candidates(target_address, max_offset, max_results=20000)
+-        non_static_level1 = []
+-        for addr, ptr_val in level1:
+-            offset_from_ptr = target_address - ptr_val
+-            if module_start <= addr < module_end:
+-                chains.append([addr - module_start, offset_from_ptr])
+-                if len(chains) >= max_results:
+-                    return chains
+-            else:
+-                non_static_level1.append((addr, ptr_val))
+-
+-        if max_level >= 2:
+-            # Performans icin ikinci seviyede sadece ilk N aday genisletilir
+-            # (her biri icin ayrica tum bellek tekrar taranir - agir islemdir).
+-            # NOT: Bu deger dusuruldu (30 -> 12). Her aday, ASAGIDA
+-            # tum bellegi TEKRAR tarayan agir bir _find_pointer_candidates
+-            # cagrisi tetikler - 30 aday, gercek oyunlarda dakikalarca
+-            # surebiliyordu. Artik bu tarama arka plan thread'inde
+-            # calistigi icin arayuz artik kilitlenmiyor, ama yine de
+-            # makul bir sinirla tutuyoruz.
+-            for mid_addr, mid_ptr_val in non_static_level1[:12]:
+-                if len(chains) >= max_results:
+-                    break
+-                offset1 = target_address - mid_ptr_val
+-                level2 = self._find_pointer_candidates(mid_addr, max_offset, max_results=5000)
+-                for addr2, ptr_val2 in level2:
+-                    if module_start <= addr2 < module_end:
+-                        offset0 = mid_addr - ptr_val2
+-                        chains.append([addr2 - module_start, offset0, offset1])
++        for _level in range(max_level):
++            if not frontier or len(chains) >= max_results:
++                break
++            next_frontier: List[Tuple[int, List[int]]] = []
++            for need_addr, suffix in frontier[: self.POINTER_SCAN_FRONTIER_CAP]:
++                for loc_addr, val in self._pointer_map_candidates(values, addrs, need_addr, max_offset):
++                    offset = need_addr - val
++                    new_suffix = [offset] + suffix
++                    if module_start <= loc_addr < module_end:
++                        chains.append([loc_addr - module_start] + new_suffix)
+                         if len(chains) >= max_results:
+                             break
++                    else:
++                        next_frontier.append((loc_addr, new_suffix))
++                if len(chains) >= max_results:
++                    break
++            frontier = next_frontier
++
+         return chains
+ 
+     # ---------------- Byte-level patch / undo ----------------
+--- orig/main.py	2026-07-28 06:18:02.000000000 +0000
++++ GameTrainer-main/main.py	2026-07-28 06:34:56.274419064 +0000
+@@ -1707,14 +1707,17 @@
+ 
+         choice, ok = QInputDialog.getItem(
+             self, "Tarama Derinligi",
+-            "Hizli: sadece dogrudan (statik) pointer'lari arar, saniyeler surer.\n"
+-            "Detayli: 2 seviyeli arar (daha fazla sonuc bulabilir) ama HER aday\n"
+-            "icin tum bellegi tekrar tarar - buyuk oyunlarda dakikalar surebilir.",
+-            ["Hizli (1 seviye)", "Detayli (2 seviye, cok yavas)"], editable=False,
++            "Bellek tek seferde taranip indekslenir (Cheat Engine'deki\n"
++            "pointer map mantigina benzer) - tum seviyeler bu hazir tablo\n"
++            "uzerinde calisir, bu yuzden derinlik arttikca sure ciddi\n"
++            "artmaz. Cok derin (4) zincirler daha fazla YANLIS POZITIF\n"
++            "(rastlantisal eslesen) sonuc da uretebilir - ilk siradaki\n"
++            "sonuclar genelde daha guvenilirdir.",
++            ["1 seviye", "2 seviye", "3 seviye", "4 seviye"], editable=False,
+         )
+         if not ok:
+             return
+-        max_level = 1 if choice.startswith("Hizli") else 2
++        max_level = ["1 seviye", "2 seviye", "3 seviye", "4 seviye"].index(choice) + 1
+ 
+         def on_success(chains):
+             self.status_bar.showMessage("Hazir.")
