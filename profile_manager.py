@@ -34,6 +34,12 @@ def save_profile(process_name: str, game_label: str, addresses: List[WatchedAddr
       process'i yeniden baslatilana kadar geçerlidir (ASLR yuzunden oyun
       kapatilip acilinca degisir). Yine de ayni oturum icinde (uygulamayi
       kapatip acmak ama oyunu kapatmamak) ise yarar, bu yuzden saklaniyor.
+
+    anchor_pattern/anchor_disp_pos/anchor_instr_len doluysa (Auto Pointer
+    Repair), bunlar da kaydedilir - eski profillerde bu alanlar yok, ama
+    load_profile()'in .get(...) ile okumasi sayesinde geriye donuk uyumlu
+    (eksikse None/varsayilan olarak yuklenir, anchor'siz normal pointer
+    zinciri gibi davranir).
     """
     os.makedirs(PROFILES_DIR, exist_ok=True)
     data = {
@@ -47,6 +53,9 @@ def save_profile(process_name: str, game_label: str, addresses: List[WatchedAddr
                 "offsets": a.offsets,
                 "hotkey": a.hotkey,
                 "permanent": bool(a.offsets),
+                "anchor_pattern": a.anchor_pattern,
+                "anchor_disp_pos": a.anchor_disp_pos,
+                "anchor_instr_len": a.anchor_instr_len,
             }
             for a in addresses
         ],

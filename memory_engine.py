@@ -48,9 +48,21 @@ ALL_TYPES = list(TYPE_MAP.keys())
 MEM_COMMIT = 0x1000
 PAGE_READWRITE = 0x04
 PAGE_READONLY = 0x02
+PAGE_EXECUTE = 0x10
+PAGE_EXECUTE_READ = 0x20
 PAGE_EXECUTE_READWRITE = 0x40
+PAGE_EXECUTE_WRITECOPY = 0x80
 PAGE_GUARD = 0x100
 SCANNABLE_PROTECT = {PAGE_READWRITE, PAGE_EXECUTE_READWRITE}
+# Kod (calistirilabilir) bolgeler icin ayri bir set: Auto Pointer Repair
+# 'anchor' aramasi (bkz. find_anchor_for_address), bir statik adrese
+# ERISEN RIP-relative MOV/LEA instruction'ini ARIYOR - bu instruction'lar
+# genelde SADECE-OKUNUR+CALISTIRILABILIR (.text bolumu, PAGE_EXECUTE_READ)
+# sayfalarda bulunur, SCANNABLE_PROTECT'in kapsadigi yazilabilir veri
+# bolgelerinde DEGIL. Bu yuzden normal deger/AOB taramasi bu sayfalari
+# atlar (yazilamaz oldugu icin "cheat" saklamaya uygun degildir) ama
+# anchor aramasi ozellikle bunlari hedefler.
+CODE_PROTECT = {PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY}
 
 
 class MEMORY_BASIC_INFORMATION(ctypes.Structure):
@@ -100,6 +112,21 @@ class WatchedAddress:
     hotkey: Optional[str] = None
     # profil olarak kaydederken process'e göre değişmeyen offset zinciri
     offsets: List[int] = field(default_factory=list)
+    # ---- Auto Pointer Repair (bkz. find_anchor_for_address/repair_anchor) ----
+    # Doldurulmussa, offsets[0]'un (module_base + offsets[0] ile hesaplanan
+    # SABIT SAYISAL offset) yerine, bu AOB pattern'i her seferinde yeniden
+    # TARAYIP bulunan instruction'in RIP-relative disp32'sinden GUNCEL
+    # statik pointer adresi hesaplanir. Oyun guncellenip kodun/verinin
+    # modul icindeki KONUMU (RVA) kayarsa bile, bu instruction genelde
+    # ayni islevi gormeye devam eder ve dogru (yeni) adresi kendiliginden
+    # verir - yani her okuma/yazmada OTOMATIK ONARIM saglanmis olur, ayrica
+    # bir 'onar' butonuna basmaya GEREK YOKTUR (bkz. MemoryEngine.
+    # resolve_watched_address). offsets[1:] (struct ici alanlar) DEGISMEDEN
+    # kullanilmaya devam eder - onlar struct duzenine bagli, kod konumuna
+    # degil (struct'in kendisi de degismedigi surece gecerliligini korur).
+    anchor_pattern: Optional[str] = None      # ornek: "48 8B 0D ?? ?? ?? ??"
+    anchor_disp_pos: Optional[int] = None     # pattern icinde disp32'nin basladigi index (byte)
+    anchor_instr_len: Optional[int] = None    # instruction'in TOPLAM uzunlugu (RIP bu kadar sonra baslar)
 
 
 # ---------------------------------------------------------------------
@@ -412,10 +439,165 @@ class MemoryEngine:
             addr = self.pm.read_longlong(addr) + off
         return addr
 
+    def resolve_watched_address(self, wa: "WatchedAddress") -> int:
+        """
+        resolve_pointer_chain'in Auto Pointer Repair FARKINDA versiyonu.
+
+        - wa.anchor_pattern DOLUYSA: offsets[0]'un sabit sayisal
+          module_base+offset hesabi yerine, repair_anchor() ile GUNCEL
+          statik pointer adresi bulunur (AOB tekrar taranir, RIP-relative
+          disp32 tekrar okunur). Bu, HER cagride yapilir - yani oyun
+          guncellenip kodun modul icindeki konumu kaysa bile, bu adres
+          KENDILIGINDEN dogru kalir (ayri bir 'onar' adimi gerekmez).
+        - Kalan offsets[1:] (struct ici alanlar) AYNI KALIR - onlar
+          struct'in duzenine bagli, kodun konumuna degil.
+        - anchor_pattern yoksa (eski/normal pointer zinciri), davranis
+          resolve_pointer_chain ile birebir aynidir (module_base+offsets[0]).
+        """
+        if not wa.offsets:
+            raise ValueError("offsets bos olamaz")
+        if wa.anchor_pattern:
+            addr = self.repair_anchor(
+                wa.anchor_pattern, wa.anchor_disp_pos, wa.anchor_instr_len
+            )
+            if addr is None:
+                raise ValueError(
+                    f"Anchor pattern bulunamadi ('{wa.name}') - oyun guncellenip "
+                    "bu instruction tamamen kaldirilmis/degistirilmis olabilir. "
+                    "Anchor'i yeniden bulmayi dene."
+                )
+        else:
+            if self.base_address is None:
+                raise ValueError(
+                    "Bu process icin module base adresi bulunamadi "
+                    f"({getattr(self, 'base_address_error', 'bilinmeyen sebep')}). "
+                    "Pointer zinciri kullanamazsin, ham/manuel adres veya AOB kullan."
+                )
+            addr = self.base_address + wa.offsets[0]
+        for off in wa.offsets[1:]:
+            addr = self.pm.read_longlong(addr) + off
+        return addr
+
+    # ---------------- Auto Pointer Repair (RIP-relative "anchor") ----------------
+    # AMAC: bir pointer zincirinin ILK adimi (module_base + offsets[0]) genelde
+    # tek bir yerde, koddaki bir "MOV reg, [rip+disp32]" veya "LEA reg,
+    # [rip+disp32]" (x64 RIP-relative adresleme) instruction'indan turer.
+    # Oyun guncellenince bu instruction'in MODUL ICINDEKI KONUMU (RVA)
+    # kayabilir (derleyici kodu yeniden duzenler), bu yuzden sabit sayisal
+    # "offsets[0]" degeri artik YANLIS statik adrese isaret eder.
+    #
+    # COZUM: instruction'in KENDISINI (disp32 wildcard'lanmis halde) bir AOB
+    # imzasi olarak saklariz. Oyun guncellenip instruction baska bir yere
+    # tasinsa bile, KODUN KENDISI (compiler ayni islevi ureten benzer byte
+    # dizisini tekrar uretecegi icin) genelde AYNI kalir - AOB tekrar
+    # bulunur, o anki (GUNCEL, doğru) disp32'si okunur, hedef yeniden
+    # hesaplanir. Boylece "offsets[0]" kalici sayi yerine KENDI KENDINI
+    # GUNCELLEYEN bir referansa donusur.
+    #
+    # SINIR: bu, sadece STATIK POINTER'IN KONUMUNU (offsets[0]) onarir.
+    # Struct'in kendisi (offsets[1:] alanlarinin gecerliligi) yeniden
+    # duzenlenirse (alan eklenip/cikarilirsa) bu otomatik olarak
+    # DUZELTILEMEZ - kullanicinin struct offsetlerini yeniden bulmasi
+    # gerekir. Pratikte oyun guncellemelerinin buyuk kismi bu senaryo
+    # DEGILDIR (struct nadiren degisir, kod/RVA'lar sik degisir).
+
+    # x64'te ilgilenilen RIP-relative MOV/LEA opcode'lari:
+    # REX.W(0x48/0x4C/0x49/0x4D) + [8B=MOV r64,r/m64 | 8D=LEA r64,m] +
+    # ModRM(mod=00,rm=101 -> RIP-relative) + disp32(4 byte) = 7 byte toplam.
+    _ANCHOR_OPCODES = (0x8B, 0x8D)
+    _ANCHOR_INSTR_LEN = 7  # REX(1) + opcode(1) + ModRM(1) + disp32(4)
+
+    def find_anchor_for_address(
+        self, target_address: int, max_results: int = 5
+    ) -> List[dict]:
+        """
+        target_address'e RIP-relative olarak erisen MOV/LEA instruction'
+        larini kod (.text) bolgelerinde arar. Bulunan her aday icin
+        wildcard'li AOB pattern'i + disp32 pozisyonu + instruction uzunlugunu
+        dondurur - bunlar dogrudan WatchedAddress.anchor_* alanlarina
+        yazilabilir.
+
+        Donen: [{"pattern": "48 8B 0D ?? ?? ?? ??", "disp_pos": 3,
+                 "instr_len": 7, "instr_addr": 0x7ff6...}, ...]
+
+        Birden fazla sonuc donebilir (ayni statik adrese birden fazla yerden
+        erisilebilir) - cagiran taraf (main.py) genelde ilkini kullanir ya
+        da kullaniciya secim sunar (pointer scan akisiyla tutarli UX icin).
+        """
+        results = []
+        overlap = self._ANCHOR_INSTR_LEN - 1
+        for base, region_size in self._enumerate_code_regions():
+            for chunk_base, data in self._iter_region_chunks(base, region_size, overlap):
+                limit = len(data) - self._ANCHOR_INSTR_LEN
+                pos = 0
+                while pos <= limit:
+                    rex = data[pos]
+                    if not (0x48 <= rex <= 0x4D):
+                        pos += 1
+                        continue
+                    opcode = data[pos + 1]
+                    if opcode not in self._ANCHOR_OPCODES:
+                        pos += 1
+                        continue
+                    modrm = data[pos + 2]
+                    if (modrm & 0xC7) != 0x05:  # mod=00, rm=101 (RIP-relative)
+                        pos += 1
+                        continue
+                    disp32 = struct.unpack_from("<i", data, pos + 3)[0]
+                    instr_addr = chunk_base + pos
+                    next_instr_addr = instr_addr + self._ANCHOR_INSTR_LEN
+                    if next_instr_addr + disp32 == target_address:
+                        instr_bytes = data[pos:pos + self._ANCHOR_INSTR_LEN]
+                        pattern = " ".join(
+                            f"{b:02X}" if i < 3 else "??"
+                            for i, b in enumerate(instr_bytes)
+                        )
+                        results.append({
+                            "pattern": pattern,
+                            "disp_pos": 3,
+                            "instr_len": self._ANCHOR_INSTR_LEN,
+                            "instr_addr": instr_addr,
+                        })
+                        if len(results) >= max_results:
+                            return results
+                    pos += 1
+        return results
+
+    def repair_anchor(
+        self, anchor_pattern: str, anchor_disp_pos: int, anchor_instr_len: int
+    ) -> Optional[int]:
+        """
+        Kayitli AOB anchor'ini tekrar tarar (find_anchor_for_address ile
+        bulunmus, disp32'si wildcard'lanmis instruction), instruction'i
+        (muhtemelen kaymis yeni konumunda) yeniden bulur, o anki disp32'yi
+        okuyup GUNCEL hedef (statik pointer) adresini hesaplar.
+
+        Instruction hic bulunamazsa (kod tamamen kaldirilmis/degistirilmis)
+        None doner - cagiran taraf (resolve_watched_address) bunu acikca
+        bir hataya cevirir.
+        """
+        matches = self.pattern_scan(anchor_pattern, max_results=5)
+        if not matches:
+            return None
+        instr_addr = matches[0]
+        try:
+            disp_bytes = self.pm.read_bytes(instr_addr + anchor_disp_pos, 4)
+            disp32 = struct.unpack("<i", disp_bytes)[0]
+        except Exception:
+            return None
+        next_instr_addr = instr_addr + anchor_instr_len
+        return next_instr_addr + disp32
+
     # ---------------- Bellek bölgelerini tarama (Cheat Engine tarzı) ----------------
 
-    def _enumerate_regions(self):
-        """Process'in yazılabilir bellek bölgelerini döndürür (start, size)."""
+    def _enumerate_regions(self, protect_set=None):
+        """Process'in bellek bolgelerini dondurur (start, size).
+        protect_set verilmezse varsayilan olarak YAZILABILIR/OKUNABILIR
+        bolgeler (SCANNABLE_PROTECT) dondurulur - deger/AOB taramasi bunu
+        kullanir. Kod (.text) bolgelerini taramak icin (bkz.
+        find_anchor_for_address) protect_set=CODE_PROTECT verilir."""
+        if protect_set is None:
+            protect_set = SCANNABLE_PROTECT
         kernel32 = _configure_kernel32()
         handle = self.pm.process_handle
         mbi = MEMORY_BASIC_INFORMATION()
@@ -431,13 +613,19 @@ class MemoryEngine:
                 break
             if (
                 mbi.State == MEM_COMMIT
-                and mbi.Protect in SCANNABLE_PROTECT
+                and mbi.Protect in protect_set
                 and not (mbi.Protect & PAGE_GUARD)
                 and mbi.RegionSize > 0
             ):
                 regions.append((mbi.BaseAddress or 0, mbi.RegionSize))
             address += mbi.RegionSize if mbi.RegionSize else 0x1000
         return regions
+
+    def _enumerate_code_regions(self):
+        """Calistirilabilir (.text benzeri) bolgeleri dondurur - Auto
+        Pointer Repair'in anchor (RIP-relative instruction) aramasi
+        icin. Bkz. _enumerate_regions docstring'i."""
+        return self._enumerate_regions(protect_set=CODE_PROTECT)
 
     # Bir bolgeyi tek seferde okumak yerine parca parca (chunk) okur.
     # Boylece bir bolgenin KUCUK bir kismi okunamasa bile o bolgedeki

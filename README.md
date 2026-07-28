@@ -462,3 +462,38 @@ Ek olarak:
 Bu düzeltmeden sonra yeni bir sürüm (örn. `v1.1.4`) yayınlayabilirsin;
 "Pointer Zinciri Bul" veya herhangi bir tarama artık ne kadar uzun sürerse
 sürsün, pencere donmayacak, "Yanıt Vermiyor" görülmeyecek.
+
+---
+
+## Auto Pointer Repair (RIP-relative anchor ile otomatik onarım)
+
+Bir kalıcı pointer zincirinin ilk adımı (`module_base + offsets[0]`) sabit
+bir sayı olarak saklanıyordu. Oyun güncellenip derleyici kodu/verileri
+yeniden düzenlediğinde bu sayı (RVA) kayabilir ve zincir tamamen geçersiz
+hale gelirdi — kullanıcı her güncellemede pointer zincirini elden
+yeniden bulmak zorunda kalıyordu.
+
+**Çözüm:** `MemoryEngine.find_anchor_for_address()`, hedef statik adrese
+kodda erişen bir RIP-relative `MOV`/`LEA` instruction'ını (x64: `REX.W +
+8B/8D + ModRM(rip-relative) + disp32`, 7 byte) bulur ve `disp32`'yi
+wildcard'layarak bir AOB imzası olarak kaydeder (`WatchedAddress.
+anchor_pattern` / `anchor_disp_pos` / `anchor_instr_len`). Her okuma/yazmada
+`MemoryEngine.resolve_watched_address()`, bu AOB'yi (artık gerçek BMH ile)
+yeniden tarar, instruction'ın (muhtemelen kaymış) yeni konumundaki GÜNCEL
+`disp32`'sini okuyup doğru statik adresi anında yeniden hesaplar — ayrı bir
+"onar" adımı gerekmez, her zaman kendiliğinden günceldir.
+
+Kullanım: Freeze Manager'da önce "Pointer Zinciri Bul" ile kalıcı bir
+zincir oluştur, sonra "Sec: Anchor Bul (Auto-Repair)" butonuna bas. Birden
+fazla instruction aynı adrese erişiyorsa (nadir değildir) bir seçim listesi
+sunulur. Anchor atanan satırlar, adres sütununda `[Anchor]` etiketiyle
+gösterilir ve profillere kaydedilir (eski profillerle geriye dönük
+uyumludur — bu alanlar yoksa `None` olarak yüklenir, anchor'sız normal
+pointer zinciri gibi davranır).
+
+**Bilinen sınır:** bu yalnızca offsets[0]'un (statik pointer'ın KONUMU)
+onarımını sağlar. Struct'ın kendisi yeniden düzenlenirse (alan
+eklenip/çıkarılırsa) kalan `offsets[1:]` zinciri otomatik düzeltilemez —
+bu durumda pointer zinciri yine elden yeniden bulunmalıdır. Ayrıca şu an
+sadece x64 RIP-relative adresleme destekleniyor (32-bit mutlak adresleme
+kullanan eski/32-bit oyunlarda anchor bulunamaz).

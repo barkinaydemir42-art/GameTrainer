@@ -883,6 +883,9 @@ class LocalTrainerStudio(QMainWindow):
             wa = WatchedAddress(
                 name=c["name"], address=c.get("address", 0), value_type=c["value_type"],
                 offsets=offsets, hotkey=c.get("hotkey"),
+                anchor_pattern=c.get("anchor_pattern"),
+                anchor_disp_pos=c.get("anchor_disp_pos"),
+                anchor_instr_len=c.get("anchor_instr_len"),
             )
             self.watched.append(wa)
             if wa.hotkey:
@@ -1431,6 +1434,17 @@ class LocalTrainerStudio(QMainWindow):
         )
         btn_pointer_scan.clicked.connect(self._find_pointer_chain_for_selected)
         btn_row.addWidget(btn_pointer_scan)
+        self.btn_find_anchor = btn_find_anchor = QPushButton("Sec: Anchor Bul (Auto-Repair)")
+        btn_find_anchor.setToolTip(
+            "Zaten kalici pointer zincirine sahip bir cheat icin, o statik\n"
+            "adrese kodda ERISEN bir instruction'i (RIP-relative MOV/LEA)\n"
+            "AOB imzasi olarak kaydeder. Boylece oyun GUNCELLENIP kodun\n"
+            "modul icindeki konumu kaysa bile, adres her okuma/yazmada\n"
+            "KENDILIGINDEN yeniden hesaplanir - ayri bir 'onar' adimina\n"
+            "gerek kalmaz. AGIR bir islemdir (tum .text bolgesini tarar)."
+        )
+        btn_find_anchor.clicked.connect(self._find_anchor_for_selected)
+        btn_row.addWidget(btn_find_anchor)
         btn_change_type = QPushButton("Sec: Tip Degistir")
         btn_change_type.setToolTip(
             "Yanlis tip secilmisse (ornek: Cheat Engine'de '4 Bytes' bulup\n"
@@ -1482,6 +1496,12 @@ class LocalTrainerStudio(QMainWindow):
           sadece GORUNTULEME icin guncellenir.
         - offsets boşsa: ham (session'a ozel) adres dogrudan kullanilir.
 
+        wa.anchor_pattern DOLUYSA (Auto Pointer Repair aktif), cozumleme
+        resolve_watched_address() uzerinden yapilir: offsets[0]'un sabit
+        sayisal degeri yerine, AOB anchor'i HER SEFERINDE yeniden taranip
+        GUNCEL statik pointer adresi hesaplanir - oyun guncellenip kodun
+        modul icindeki konumu (RVA) kaysa bile bu otomatik dogru kalir.
+
         ONCEKI EKSIK: profil offsets ile yuklendiginde ama ham 'address'
         alani 0 oldugunda (baska bir bilgisayardan ice aktarilan profil
         gibi), eskiden hicbir yerde offsets cozulmuyordu - bu tur kalici
@@ -1492,7 +1512,7 @@ class LocalTrainerStudio(QMainWindow):
             if not self.engine.attached:
                 return None
             try:
-                addr = self.engine.resolve_pointer_chain(wa.offsets)
+                addr = self.engine.resolve_watched_address(wa)
                 wa.address = addr
                 return addr
             except Exception:
@@ -1650,6 +1670,87 @@ class LocalTrainerStudio(QMainWindow):
             self.engine.find_pointers_to, on_success, wa.address, max_level=max_level,
         )
 
+    def _find_anchor_for_selected(self):
+        """
+        Auto Pointer Repair: secili cheat'in statik pointer konumuna
+        (module_base + offsets[0]) kodda ERISEN bir RIP-relative
+        instruction'i AOB imzasi olarak bulup kaydeder. Bkz.
+        MemoryEngine.find_anchor_for_address / repair_anchor.
+        """
+        idx = self._selected_watched_index()
+        if idx is None:
+            QMessageBox.information(self, "Bilgi", "Once listeden bir satir sec.")
+            return
+        wa = self.watched[idx]
+        if not wa.offsets:
+            QMessageBox.warning(
+                self, "Uyari",
+                "Once 'Pointer Zinciri Bul' ile kalici bir zincir olustur - "
+                "anchor, o zincirin ILK adimini (statik pointer konumunu) hedefler."
+            )
+            return
+        if wa.anchor_pattern:
+            reply = QMessageBox.question(
+                self, "Zaten Var",
+                f"'{wa.name}' zaten bir anchor'a sahip. Yeniden mi arayayim "
+                "(ornegin oyun cok degisip eski anchor artik bulunamiyorsa)?"
+            )
+            if reply != QMessageBox.Yes:
+                return
+        if not self._require_attached():
+            return
+        if self.engine.base_address is None:
+            QMessageBox.warning(
+                self, "Uyari",
+                "Bu process icin modul base adresi yok, anchor aranamaz."
+            )
+            return
+        target = self.engine.base_address + wa.offsets[0]
+
+        def on_success(results):
+            self.status_bar.showMessage("Hazir.")
+            if not results:
+                QMessageBox.information(
+                    self, "Sonuc Yok",
+                    f"'{wa.name}' icin bu statik adrese erisen bir RIP-relative\n"
+                    "MOV/LEA instruction'i bulunamadi. Oyun farkli bir adresleme\n"
+                    "yontemi kullaniyor olabilir (ornegin 32-bit mutlak adres) - \n"
+                    "bu durumda Auto Pointer Repair su an desteklemiyor."
+                )
+                return
+            if len(results) == 1:
+                chosen = results[0]
+            else:
+                labels = [
+                    f"{i+1}) {r['pattern']}  (adres: {hex(r['instr_addr'])})"
+                    for i, r in enumerate(results)
+                ]
+                label, ok2 = QInputDialog.getItem(
+                    self, "Anchor Sec",
+                    f"{len(results)} aday bulundu (ayni adrese birden fazla\n"
+                    "yerden erisiliyor olabilir). Birini sec:",
+                    labels, editable=False,
+                )
+                if not ok2:
+                    return
+                chosen = results[labels.index(label)]
+            wa.anchor_pattern = chosen["pattern"]
+            wa.anchor_disp_pos = chosen["disp_pos"]
+            wa.anchor_instr_len = chosen["instr_len"]
+            self.log(f"'{wa.name}' icin anchor atandi: {chosen['pattern']}")
+            self._refresh_freeze_table()
+            QMessageBox.information(
+                self, "Basarili",
+                f"'{wa.name}' artik Auto Pointer Repair kullaniyor.\n"
+                "Oyun guncellenip kodun konumu kayarsa, adres kendiliginden\n"
+                "yeniden hesaplanacak. Bunu koru diye 'Profili Kaydet'e basmayi unutma."
+            )
+
+        self._run_scan_in_background(
+            "Anchor araniyor (tum kod bolgesi taraniyor, biraz surebilir)...",
+            self.engine.find_anchor_for_address, on_success, target,
+        )
+
     def _change_type_for_selected(self):
         """
         Var olan bir cheat'in deger tipini degistirir (silip yeniden
@@ -1769,9 +1870,12 @@ class LocalTrainerStudio(QMainWindow):
             self.freeze_table.setItem(row, 1, name_item)
 
             resolved_addr = self._resolve_wa_address(wa)
-            addr_label = hex(resolved_addr) if resolved_addr else (
-                "(cozulemedi)" if wa.offsets else "(offset zinciri)"
-            )
+            if resolved_addr:
+                addr_label = hex(resolved_addr)
+                if wa.anchor_pattern:
+                    addr_label += "  [Anchor]"
+            else:
+                addr_label = "(cozulemedi)" if wa.offsets else "(offset zinciri)"
             addr_item = QTableWidgetItem(addr_label)
             addr_item.setFlags(addr_item.flags() & ~Qt.ItemIsEditable)
             self.freeze_table.setItem(row, 2, addr_item)
