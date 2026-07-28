@@ -7,8 +7,10 @@ Gereksinim: pip install pymem psutil
 """
 
 import ctypes
+import os
 import struct
 import time
+import multiprocessing
 from ctypes import wintypes
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
@@ -98,6 +100,211 @@ class WatchedAddress:
     hotkey: Optional[str] = None
     # profil olarak kaydederken process'e göre değişmeyen offset zinciri
     offsets: List[int] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------
+# AOB / Pattern tarama - MODUL SEVIYESI yardimci fonksiyonlar
+# ---------------------------------------------------------------------
+# Bilerek MemoryEngine sinifinin DISINDA tanimlandi: hem MemoryEngine.
+# pattern_scan (tek-process) hem de _parallel_scan_worker (multiprocessing,
+# ayri process'lerde calisir) tarafindan ortak kullanilir. Bir worker
+# process, bir MemoryEngine ORNEGINE (ic ice pymem Windows handle'i icerir)
+# erisemez/pickle'layamaz - bu yuzden bu fonksiyonlar sadece duz
+# bytes/dict/int alip donduren, PICKLENEBILIR VERIYLE calisan saf
+# fonksiyonlar olarak yazildi.
+
+def _parse_pattern(pattern: str) -> Tuple[bytes, bytes]:
+    """'A1 ?? ?? ?? ?? 8B 45' gibi bir pattern'i (bytes, mask) ciftine cevirir.
+    mask: eslesecek byte icin 0xFF, wildcard (??) icin 0x00"""
+    tokens = pattern.strip().split()
+    pat_bytes = bytearray()
+    mask = bytearray()
+    for tok in tokens:
+        if tok in ("??", "?"):
+            pat_bytes.append(0x00)
+            mask.append(0x00)
+        else:
+            pat_bytes.append(int(tok, 16))
+            mask.append(0xFF)
+    return bytes(pat_bytes), bytes(mask)
+
+
+def _match_at(data: bytes, offset: int, pat: bytes, mask: bytes) -> bool:
+    if offset + len(pat) > len(data):
+        return False
+    for i in range(len(pat)):
+        if mask[i] and data[offset + i] != pat[i]:
+            return False
+    return True
+
+
+def _build_bmh_shift_table(pat: bytes, mask: bytes) -> dict:
+    """
+    Gercek Boyer-Moore-Horspool 'kotu karakter' kaydirma tablosunu kurar -
+    wildcard destekli.
+
+    ONCEKI SURUM pattern'deki TEK bir sabit byte'i 'capa' secip
+    bytes.find() ile o capayi ariyor, sonra tam pattern'i dogruluyordu.
+    Bu, capa byte'i bellekte sik rastlanan bir deger oldugunda (ornegin
+    x86 kodunda cok yaygin bir opcode) cok sayida yanlis aday uretip
+    bosuna dogrulama yaptiriyordu - pattern'deki DIGER sabit byte'lar
+    kaydirma hesabina hic katilmiyordu.
+
+    Bu fonksiyon, klasik BMH mantigini kurar: pattern icindeki SON pozisyon
+    HARIC her SABIT (wildcard olmayan) byte icin, "pencerenin son
+    pozisyonunda bu byte'i gorursen, kac ileri atlayabilirsin" degerini
+    tabloya yazar.
+
+    ONEMLI DUZELTME (wildcard guvenligi): bir WILDCARD pozisyonu, ICINDE
+    HANGI BYTE OLURSA OLSUN eslesir kabul edilir. Bu yuzden, bir sabit
+    byte'a gore hesaplanan kaydirma miktari, o sabit byte'in SAGINDA
+    (pattern sonuna daha yakin) bir wildcard varsa, o wildcard'in
+    dayattigi daha kucuk/daha guvenli sinirla KISITLANMALIDIR - aksi
+    halde pattern'in ortasinda/sonunda bir wildcard varken sadece solundaki
+    bir sabit byte'a bakip daha BUYUK bir kaydirma yapmak, wildcard'in
+    "her seyle eslesebilir" olma ozelligiyle olusabilecek GERCEK bir
+    eslesmeyi atlayip kacirabilir (ilk surumde tam olarak bu hataya
+    rastlanip fuzz testiyle yakalandi - bkz. gecmis). Ayni mantikla,
+    tabloda hic karsiligi olmayan (pattern'de sabit byte olarak hic
+    gecmeyen) bir deger icin varsayilan kaydirma da, en sagdaki wildcard'in
+    izin verdigi miktarla sinirlidir (wildcard yoksa tam pattern uzunlugu
+    guvenlidir).
+
+    Donen sozluk her BYTE DEGERI (0-255) icin guvenli kaydirma miktarini
+    tutar; ozel `None` anahtari, tabloda karsiligi olmayan degerler icin
+    kullanilacak VARSAYILAN kaydirma miktarini tasir (data pozisyonlarindaki
+    gercek byte degerleri 0-255 oldugu icin None ile hicbir zaman
+    cakismaz).
+    """
+    n = len(pat)
+    wildcard_positions = [i for i in range(n - 1) if not mask[i]]
+    wildcard_bound = (n - 1 - max(wildcard_positions)) if wildcard_positions else n
+
+    table = {}
+    for i in range(n - 1):
+        if mask[i]:
+            # Ayni byte birden fazla sabit pozisyonda geçiyorsa, soldan
+            # saga ilerleyip uzerine yazarak EN SAGDAKI (en kucuk kaydirma
+            # miktarina sahip) oluşumun kazanmasi saglanir.
+            table[pat[i]] = n - 1 - i
+
+    for c in list(table.keys()):
+        if wildcard_bound < table[c]:
+            table[c] = wildcard_bound
+    table[None] = wildcard_bound
+    return table
+
+
+def _bmh_find_all(
+    data: bytes, pat: bytes, mask: bytes, shift_table: dict,
+    max_results: int, found: list, base_addr: int,
+) -> bool:
+    """Tek bir bellek parcasi (chunk) icinde BMH ile TUM eslesmeleri bulur,
+    (base_addr + pozisyon) olarak found listesine ekler. max_results'a
+    ulasilirsa True dondurur (cagiran taraf taramayi tamamen durdurmali)."""
+    n = len(pat)
+    limit = len(data) - n
+    default_shift = shift_table[None]
+    pos = 0
+    while pos <= limit:
+        if _match_at(data, pos, pat, mask):
+            found.append(base_addr + pos)
+            if len(found) >= max_results:
+                return True
+            pos += 1  # ust uste binen (overlapping) eslesmeleri de yakala
+            continue
+        key_byte = data[pos + n - 1]
+        pos += shift_table.get(key_byte, default_shift)
+    return False
+
+
+# ---------------------------------------------------------------------
+# Coklu-process (multiprocessing) AOB tarama - yardimcilar
+# ---------------------------------------------------------------------
+# GIL yuzunden CPU-bound byte karsilastirmasini THREAD'lerle paralellestir-
+# menin faydasi yoktur (ayni anda sadece 1 Python bytecode calisir) -
+# gercek paralellik icin AYRI PROCESS gerekir. Her worker process kendi
+# OpenProcess/ReadProcessMemory cagrilarini yapar (pymem'in Pymem nesnesi
+# process'ler arasi tasınamaz/pickle'lanamaz).
+
+_PROCESS_QUERY_INFORMATION = 0x0400
+_PROCESS_VM_READ = 0x0010
+
+
+def _open_process_for_read(pid: int) -> int:
+    handle = ctypes.windll.kernel32.OpenProcess(
+        _PROCESS_QUERY_INFORMATION | _PROCESS_VM_READ, False, pid
+    )
+    if not handle:
+        raise OSError(f"OpenProcess basarisiz (pid={pid})")
+    return handle
+
+
+def _read_process_memory_raw(handle: int, address: int, size: int) -> bytes:
+    buffer = ctypes.create_string_buffer(size)
+    bytes_read = ctypes.c_size_t(0)
+    ok = ctypes.windll.kernel32.ReadProcessMemory(
+        handle, ctypes.c_void_p(address), buffer, size, ctypes.byref(bytes_read)
+    )
+    if not ok:
+        raise OSError(f"ReadProcessMemory basarisiz (adres={hex(address)})")
+    return buffer.raw[:bytes_read.value]
+
+
+def _split_regions_balanced(
+    regions: List[Tuple[int, int]], num_workers: int
+) -> List[List[Tuple[int, int]]]:
+    """Bolgeleri num_workers gruba TOPLAM BOYUTA GORE dengeli dagitir
+    (greedy bin-packing: her bolge, o ana kadar en az yuklenmis kovaya
+    eklenir). Boylece bir worker'a tesadufen dev bolgelerin (ornegin bazi
+    Unreal Engine oyunlarinin GB'larca commit alani) cogu duserken
+    digerleri erken bitirip bos oturmaz."""
+    buckets: List[List[Tuple[int, int]]] = [[] for _ in range(num_workers)]
+    bucket_totals = [0] * num_workers
+    for base, size in sorted(regions, key=lambda r: r[1], reverse=True):
+        idx = bucket_totals.index(min(bucket_totals))
+        buckets[idx].append((base, size))
+        bucket_totals[idx] += size
+    return [b for b in buckets if b]  # bolge sayisi < worker sayisiysa bos kovalari at
+
+
+def _parallel_scan_worker(args) -> List[int]:
+    """
+    AYRI BIR PROCESS'TE calisir (multiprocessing.Pool tarafindan
+    baslatilir) - bu yuzden 'self' YOK, sadece picklenebilir argumanlar
+    (pid, bolge listesi, pattern/mask, vb.) kullanilabilir.
+
+    Kendi process handle'ini acar, kendisine atanan bellek bolgelerini
+    okuyup BMH ile tarar, bulunan adresleri dondurur. Bir bolge/parca
+    okunamazsa (nadiren olur) sadece o parcayi atlar, TUM taramayi iptal
+    etmez - MemoryEngine._iter_region_chunks'taki ayni davranisla tutarli.
+    """
+    pid, regions, pat, mask, max_results, chunk_size = args
+    try:
+        handle = _open_process_for_read(pid)
+    except OSError:
+        return []
+
+    shift_table = _build_bmh_shift_table(pat, mask)
+    overlap = len(pat) - 1
+    found: List[int] = []
+    try:
+        for base, region_size in regions:
+            offset = 0
+            while offset < region_size:
+                this_size = min(chunk_size, region_size - offset)
+                try:
+                    data = _read_process_memory_raw(handle, base + offset, this_size)
+                except OSError:
+                    offset += this_size
+                    continue
+                if _bmh_find_all(data, pat, mask, shift_table, max_results, found, base + offset):
+                    return found
+                step = this_size - overlap if this_size > overlap else this_size
+                offset += step
+    finally:
+        ctypes.windll.kernel32.CloseHandle(handle)
+    return found
 
 
 class MemoryEngine:
@@ -322,85 +529,120 @@ class MemoryEngine:
         return self._last_results
 
     # ---------------- AOB / Pattern tarama ----------------
-
-    @staticmethod
-    def _parse_pattern(pattern: str) -> Tuple[bytes, bytes]:
-        """
-        'A1 ?? ?? ?? ?? 8B 45' gibi bir pattern'i (bytes, mask) ciftine cevirir.
-        mask: eslesecek byte icin 0xFF, wildcard (??) icin 0x00
-        """
-        tokens = pattern.strip().split()
-        pat_bytes = bytearray()
-        mask = bytearray()
-        for tok in tokens:
-            if tok in ("??", "?"):
-                pat_bytes.append(0x00)
-                mask.append(0x00)
-            else:
-                pat_bytes.append(int(tok, 16))
-                mask.append(0xFF)
-        return bytes(pat_bytes), bytes(mask)
-
-    @staticmethod
-    def _match_at(data: bytes, offset: int, pat: bytes, mask: bytes) -> bool:
-        if offset + len(pat) > len(data):
-            return False
-        for i in range(len(pat)):
-            if mask[i] and data[offset + i] != pat[i]:
-                return False
-        return True
-
-    # Bellekte/binary'lerde asiri sik rastlanan dolgu byte'lari - bunlari
-    # capa olarak secmekten kacinilir (secilirlerse bytes.find neredeyse
-    # her yerde "hit" doner, gercek BMH avantajini yok eder).
-    _COMMON_FILLER_BYTES = {0x00, 0xFF, 0x90, 0xCC}
+    # Yardimci fonksiyonlar (_parse_pattern, _match_at, _build_bmh_shift_table,
+    # _bmh_find_all) BILEREK bu sinifin DISINDA, MODUL SEVIYESINDE tanimlandi
+    # (asagida) - hem pattern_scan (tek-process) hem de pattern_scan_parallel
+    # (coklu-process, bkz. asagisi) tarafindan ortak kullanilabilmesi icin.
+    # multiprocessing worker'lari AYRI BIR PYTHON PROCESS'INDE calisir ve
+    # orada bir MemoryEngine ORNEGINE (dolayisiyla self.pm'nin Windows handle'ina)
+    # erisemez - handle'lar process'e ozeldir, pickle'lanip tasınamaz.
 
     def pattern_scan(self, pattern: str, max_results: int = 200) -> List[int]:
         """
         AOB/pattern tarama. Ornek pattern: 'A1 ?? ?? ?? ?? 8B 45 FC'
         Tum yazilabilir/okunabilir bolgeleri tarar, eslesen adresleri dondurur.
 
-        Performans notu: onceki surum pattern'deki ILK sabit byte'i capa
-        olarak kullaniyordu. Sorun: bu byte 0x00 gibi cok yaygin bir deger
-        olursa (sik rastlanir), bytes.find neredeyse her pozisyonda "aday"
-        buluyor ve capa avantaji kayboluyor. Bu surum, pattern icindeki
-        SABIT byte'lar arasindan once 0x00/0xFF/0x90/0xCC gibi asiri yaygin
-        dolgu byte'i OLMAYAN birini secmeye calisiyor (varsa), yoksa ilk
-        sabit byte'a duser. Bu basit degisiklik, gercek oyun pattern'lerinde
-        (genelde 0x00 iceren) taramayi belirgin sekilde hizlandirir.
+        Bu, TEK process icinde calisan versiyondur (esas cagiran taraf zaten
+        bunu ScanWorker/QThread'de calistiriyor - arayuz donmuyor). CPU-bound
+        bu isi THREAD'lerle daha da paralellestirmenin CPython'da GIL yuzunden
+        pratik faydasi yoktur; gercek paralellik icin pattern_scan_parallel()
+        (multiprocessing, AYRI PROCESS'ler) kullanilmali - bkz. asagisi.
+
+        Performans notu: Gercek Boyer-Moore-Horspool 'kotu karakter' kaydirma
+        tablosu kullanir (bkz. _build_bmh_shift_table). ONCEKI SURUM sadece
+        pattern'deki TEK bir sabit byte'i 'capa' secip bytes.find() ile
+        ariyor, sonra tam pattern'i dogruluyordu - capa byte'i bellekte sik
+        rastlanan bir deger oldugunda (ornegin x86 kodunda cok yaygin bir
+        opcode) cok sayida yanlis aday uretip bosuna dogrulama yapiyordu.
+        Bu surum pattern'deki TUM sabit byte'lari kaydirma hesabina katar,
+        bu yuzden capa olarak "nadir" bir byte olmasa bile (uzun/yogun
+        pattern'lerde) belirgin sekilde daha az aday dogrular.
         """
-        pat, mask = self._parse_pattern(pattern)
-        if not pat:
-            return []
+        pat, mask = _parse_pattern(pattern)
+        if not pat or not any(mask):
+            return []  # Bos pattern veya tamamen wildcard - anlamli degil
 
-        fixed_indices = [i for i, m in enumerate(mask) if m]
-        if not fixed_indices:
-            return []  # Pattern tamamen wildcard - anlamli degil
-
-        anchor_idx = next(
-            (i for i in fixed_indices if pat[i] not in self._COMMON_FILLER_BYTES),
-            fixed_indices[0],
-        )
-        anchor_byte = bytes([pat[anchor_idx]])
-
+        shift_table = _build_bmh_shift_table(pat, mask)
         overlap = len(pat) - 1
-        found = []
+        found: List[int] = []
         for base, region_size in self._enumerate_regions():
             for chunk_base, data in self._iter_region_chunks(base, region_size, overlap):
-                search_from = 0
-                while True:
-                    hit = data.find(anchor_byte, search_from)
-                    if hit == -1:
-                        break
-                    candidate_start = hit - anchor_idx
-                    search_from = hit + 1
-                    if candidate_start < 0:
-                        continue
-                    if self._match_at(data, candidate_start, pat, mask):
-                        found.append(chunk_base + candidate_start)
-                        if len(found) >= max_results:
-                            return found
+                if _bmh_find_all(data, pat, mask, shift_table, max_results, found, chunk_base):
+                    return found
         return found
+
+    def pattern_scan_parallel(
+        self, pattern: str, max_results: int = 200, max_workers: Optional[int] = None
+    ) -> List[int]:
+        """
+        pattern_scan ile AYNI SONUCU (ayni pattern, ayni BMH algoritmasi)
+        uretir, ama byte karsilastirma isini birden fazla PROCESS'e boler
+        (THREAD DEGIL).
+
+        NEDEN THREAD DEGIL: Bu is CPU-bound (saf Python dongusunde byte
+        karsilastirma). CPython'da GIL (Global Interpreter Lock) ayni anda
+        SADECE TEK bir thread'in Python bytecode calistirmasina izin verir -
+        yani threading.Thread ile bolmenin CPU-bound bir iste pratik faydasi
+        YOKTUR (I/O-bound islerde -ornegin ag indirmesi, bkz. main.py'deki
+        CoverFetchWorker- fayda saglar, cunku bekleme sirasinda GIL serbest
+        birakilir). Gercek paralellik icin ayri process'ler (her biri kendi
+        Python yorumlayicisi + kendi GIL'i ile) gerekir - burada
+        'multiprocessing' kullanilmasinin sebebi budur.
+
+        Her worker process, pymem'in Pymem nesnesini/handle'ini KULLANAMAZ
+        (Windows process handle'lari baska bir process'e tasınamaz/pickle'
+        lanamaz) - bunun yerine kendi OpenProcess/ReadProcessMemory
+        cagrilarini yapar (bkz. modul seviyesindeki _parallel_scan_worker).
+
+        Buyuk (GB'larca commit alani olan, ornegin bazi Unreal Engine
+        oyunlari) bellek tarayan agir AOB taramalarinda, cok cekirdekli
+        CPU'larda anlamli bir hizlanma saglar. Kucuk/hizli taramalarda
+        process baslatma maliyeti (platforma gore onlarca-yuzlerce ms)
+        faydayi gotürebilir - bu yuzden varsayilan DEGIL, kullanicinin
+        acikca sectigi bir secenektir (bkz. main.py'deki 'Cok Cekirdekli
+        Tara' onay kutusu).
+
+        Herhangi bir sebeple basarisiz olursa (multiprocessing baslatilamadi,
+        yetersiz izin, vb.) sessizce tek-process pattern_scan()'e duser -
+        kullaniciya "coklu-process ozelligi bozuk" diye bosuna hata vermez,
+        taramayi yine de (biraz daha yavas) tamamlar.
+        """
+        pat, mask = _parse_pattern(pattern)
+        if not pat or not any(mask):
+            return []
+
+        try:
+            pid = self.pm.process_id
+            regions = self._enumerate_regions()
+            if not regions:
+                return []
+
+            cpu_count = os.cpu_count() or 1
+            workers = max_workers or max(1, min(cpu_count, 8, len(regions)))
+            if workers <= 1:
+                return self.pattern_scan(pattern, max_results=max_results)
+
+            region_groups = _split_regions_balanced(regions, workers)
+            args_list = [
+                (pid, group, pat, mask, max_results, self.CHUNK_SIZE)
+                for group in region_groups
+            ]
+
+            # Windows'ta zaten varsayilan olan 'spawn' baslatma yontemi
+            # ACIKCA istenir - PyInstaller ile derlenmis (.exe) halde
+            # calisirken 'fork' mevcut degildir ve platformlar arasi
+            # tutarlilik icin en guvenli secimdir.
+            ctx = multiprocessing.get_context("spawn")
+            with ctx.Pool(processes=len(args_list)) as pool:
+                worker_results = pool.map(_parallel_scan_worker, args_list)
+
+            found: List[int] = []
+            for r in worker_results:
+                found.extend(r)
+            found.sort()
+            return found[:max_results]
+        except Exception:
+            return self.pattern_scan(pattern, max_results=max_results)
 
     # ---------------- Bilinmeyen Ilk Deger Taramasi ----------------
     # Klasik Cheat Engine "Unknown initial value" ozelligi: kullanici

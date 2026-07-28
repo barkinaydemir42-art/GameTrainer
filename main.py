@@ -16,6 +16,7 @@ SADECE WINDOWS'ta calisir (ReadProcessMemory/WriteProcessMemory).
 import sys
 import os
 import json
+import multiprocessing
 from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Optional
@@ -1141,6 +1142,18 @@ class LocalTrainerStudio(QMainWindow):
         self.aob_result_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.aob_result_list.itemDoubleClicked.connect(self._add_aob_result_to_watchlist)
         aob_layout.addWidget(self.aob_result_list)
+
+        self.aob_parallel_checkbox = QCheckBox("Cok cekirdekli tara (deneysel)")
+        self.aob_parallel_checkbox.setToolTip(
+            "Bellek taramasini birden fazla PROCESS'e boler (multiprocessing) - "
+            "threading DEGIL, cunku Python'daki GIL bu CPU-bound isi thread'lerle "
+            "paralellestirmeyi anlamsiz kilar. Buyuk (GB'larca) bellekte cok "
+            "cekirdekli CPU'larda hizlanma saglar; kucuk taramalarda process "
+            "baslatma maliyeti yuzunden fayda saglamayabilir. Basarisiz olursa "
+            "sessizce tek-cekirdek taramaya duser."
+        )
+        aob_layout.addWidget(self.aob_parallel_checkbox)
+
         aob_layout.addWidget(QLabel(
             "Not: '??' bilinmeyen/degisken byte anlamina gelir. Cift tiklayarak\n"
             "tek bir adresi, ya da Ctrl/Shift ile birden fazla secip asagidaki\n"
@@ -1355,10 +1368,16 @@ class LocalTrainerStudio(QMainWindow):
                 self.aob_result_list.addItem(hex(addr))
             self.status_bar.showMessage(f"AOB tarama tamamlandi: {len(addresses)} sonuc.")
 
-        self._run_scan_in_background(
-            "AOB taraniyor (buyuk bellekte biraz surebilir)...",
-            self.engine.pattern_scan, on_success, pattern, max_results=200,
-        )
+        if self.aob_parallel_checkbox.isChecked():
+            self._run_scan_in_background(
+                "AOB taraniyor (cok cekirdekli)...",
+                self.engine.pattern_scan_parallel, on_success, pattern, max_results=200,
+            )
+        else:
+            self._run_scan_in_background(
+                "AOB taraniyor (buyuk bellekte biraz surebilir)...",
+                self.engine.pattern_scan, on_success, pattern, max_results=200,
+            )
 
     def _add_aob_result_to_watchlist(self, item: QListWidgetItem):
         address = int(item.text(), 16)
@@ -2252,6 +2271,14 @@ class LocalTrainerStudio(QMainWindow):
 
 
 if __name__ == '__main__':
+    # PyInstaller ile derlenmis (.exe) frozen halde multiprocessing
+    # kullanildiginda ZORUNLU: bu cagri olmadan, Windows'ta her yeni
+    # worker process TUM programi (QApplication dahil) bastan
+    # calistirmaya calisir - sonsuz pencere/process acilmasina yol
+    # acar. freeze_support() bunu tespit edip worker process'lerin
+    # sadece atanan is'i yapip cikmasini saglar. GUI baslamadan ONCE,
+    # en basta cagrilmali.
+    multiprocessing.freeze_support()
     app = QApplication(sys.argv)
     window = LocalTrainerStudio()
     window.show()

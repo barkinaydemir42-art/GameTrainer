@@ -127,10 +127,17 @@ dosyalarını otomatik üzerine yazması çok daha riskli bir işlemdir.
    / "pointer zinciri bul" özelliğinin basit bir sürümü: bir adresi işaret
    eden diğer adresleri geriye doğru tarayıp olası offset zincirlerini
    otomatik önerme. Şu an bu iş tamamen Cheat Engine'e bırakılmış durumda.
-3. **AOB tarama performansı**: mevcut çapa-byte yaklaşımı iyi bir
-   iyileştirme ama gerçek Boyer-Moore-Horspool algoritmasına geçmek
-   (birden fazla wildcard olmayan byte'ı akıllıca kullanan) büyük
-   oyunlarda saniyeler mertebesinde daha da hızlanma sağlar.
+3. ~~**AOB tarama performansı**~~ — **YAPILDI**: `memory_engine.py` artık
+   gercek Boyer-Moore-Horspool 'kotu karakter' kaydirma tablosu kullaniyor
+   (pattern'deki TUM sabit byte'lari kaydirma hesabina katiyor, tek bir
+   capa byte'ina degil). Ayrica `pattern_scan_parallel()` ile
+   **multiprocessing** tabanli cok-cekirdekli tarama eklendi (bilerek
+   THREADING DEGIL - bu CPU-bound bir is oldugu icin CPython'daki GIL
+   yuzunden thread'lerle paralellestirmenin faydasi olmazdi; her worker
+   kendi process'inde, kendi OpenProcess/ReadProcessMemory handle'iyla
+   calisir). Arayuzde 'Auto Signature (AOB) Builder' altinda "Cok
+   cekirdekli tara (deneysel)" onay kutusu ile acilir; kapaliyken
+   varsayilan tek-process BMH taramasi calisir.
 4. **Freeze Manager'da doğrudan tabloda deger düzenleme** — şu an değer
    değiştirmek için ayrı bir dialog açılıyor; tabloya çift tıklayıp
    hücrede düzenleme daha akıcı olur.
