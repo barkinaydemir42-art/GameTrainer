@@ -2337,6 +2337,16 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
         )
         btn_pointer_scan.clicked.connect(self._find_pointer_chain_for_selected)
         btn_row.addWidget(btn_pointer_scan)
+        self.btn_manual_pointer = btn_manual_pointer = QPushButton("Sec: Pointer Zinciri Elle Gir (CE'den)")
+        btn_manual_pointer.setToolTip(
+            "Otomatik tarama (yukaridaki buton) bulamadiysa ya da cok\n"
+            "buyuk/derin bir oyun oldugu icin pratik degilse: Cheat Engine'in\n"
+            "KENDI pointer scanner'iyla (Ctrl+P, cok daha hizli/kapsamli)\n"
+            "bulunan zinciri buraya YAPISTIR - format ayni: ilk sayi modul\n"
+            "base'ine gore offset, sonrakiler sirayla her pointer'in offseti."
+        )
+        btn_manual_pointer.clicked.connect(self._enter_manual_pointer_chain_for_selected)
+        btn_row.addWidget(btn_manual_pointer)
         self.btn_narrow_pointer = btn_narrow_pointer = QPushButton("Sec: Pointer Adaylarini Daralt")
         btn_narrow_pointer.setToolTip(
             "'Pointer Zinciri Bul' onlarca aday bulup secmeni istediyse ve\n"
@@ -2525,6 +2535,111 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
             self._bind_hotkey(wa)
         self._refresh_freeze_table()
         self.log(f"{len(rows)} cheat'e ortak grup hotkey ({hk}) atandi - tek tusla hepsi birlikte ac/kapa olacak.")
+
+    def _parse_pointer_chain_input(self, text: str) -> list:
+        """Cheat Engine'den kopyalanan pointer zincirini serbest formatta
+        kabul eder: virgul/bosluk/yeni-satir/'->' ile ayrilmis, '0x' onekli
+        ya da onreksiz, ve ilk satirda 'ACShadows.exe+1A2B30' gibi modul
+        adi + '+' iceren bir yazim da olabilir (sadece '+'den sonraki kisim
+        alinir). Donen: int offset listesi (offsets[0]=modul+offset,
+        offsets[1:]=sirayla sonraki her pointer'in offseti)."""
+        import re
+        raw_tokens = re.split(r"[,\s]+|->", text.strip())
+        offsets = []
+        for tok in raw_tokens:
+            tok = tok.strip()
+            if not tok:
+                continue
+            if "+" in tok:
+                # "ACShadows.exe+1A2B30" gibi bir yazimsa, modul adini at -
+                # bizi ilgilendiren sadece son '+'den sonraki hex offset.
+                tok = tok.rsplit("+", 1)[-1]
+            tok = tok.strip()
+            if tok.lower().startswith("0x"):
+                tok = tok[2:]
+            if not tok:
+                continue
+            offsets.append(int(tok, 16))
+        return offsets
+
+    def _enter_manual_pointer_chain_for_selected(self):
+        """Otomatik tarama (find_pointers_to) bulamadiginda ya da AC
+        Shadows gibi cok derin/buyuk oyunlarda pratik olmadiginda: Cheat
+        Engine'in KENDI (cok daha optimize/kapsamli) pointer scanner'iyla
+        bulunan zinciri elle girmeyi saglar. Kaydetmeden ONCE zinciri
+        gercekten cozup mevcut degeri okuyarak canli dogrulama yapar -
+        yanlis girilmis bir zincirin sessizce kaydedilmesini onler."""
+        idx = self._selected_watched_index()
+        if idx is None:
+            QMessageBox.information(self, "Bilgi", "Once listeden bir satir sec.")
+            return
+        wa = self.watched[idx]
+        if not self._require_attached():
+            return
+        if wa.offsets:
+            reply = QMessageBox.question(
+                self, "Zaten Var",
+                f"'{wa.name}' zaten bir pointer zincirine sahip. Yeni girdigin\n"
+                "zincirle degistirmek istiyor musun?"
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+        text, ok = QInputDialog.getMultiLineText(
+            self, "Pointer Zinciri Gir (Cheat Engine formatinda)",
+            "Cheat Engine'de bulup dogruladigin zinciri yapistir.\n"
+            "Ilk deger modul+offset (ornek satirda 'ACShadows.exe+1A2B30'\n"
+            "yazsan da olur, sadece '+' sonrasi alinir), sonraki her satir/\n"
+            "deger sirayla bir sonraki pointer'in offseti. Virgul, bosluk,\n"
+            "yeni satir veya '->' ile ayirabilirsin. Ornek:\n\n"
+            "1A2B30\n8\n10\n28",
+            "",
+        )
+        if not ok or not text.strip():
+            return
+
+        try:
+            offsets = self._parse_pointer_chain_input(text)
+        except ValueError as e:
+            QMessageBox.warning(self, "Gecersiz Girdi", f"Hex sayi olarak okunamadi:\n{e}")
+            return
+        if not offsets:
+            QMessageBox.warning(self, "Gecersiz Girdi", "En az bir offset girmelisin.")
+            return
+
+        try:
+            resolved_addr = self.engine.resolve_pointer_chain(offsets)
+            current_value = self.engine.read_value(resolved_addr, wa.value_type)
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Zincir Cozulemedi",
+                f"Bu zincir su an cozulemedi/okunamadi:\n{e}\n\n"
+                "Muhtemel sebepler: bir offset yanlis, ara adimlardan biri\n"
+                "artik gecerli bir pointer'a isaret etmiyor, ya da tip yanlis\n"
+                "(ornek: int32 yerine int64 olmali)."
+            )
+            return
+
+        reply = QMessageBox.question(
+            self, "Dogrula",
+            f"Zincir cozuldu -> adres: {hex(resolved_addr)}\n"
+            f"Su an oradaki deger ({wa.value_type}): {current_value}\n\n"
+            "Bu, oyunda gordugun/bekledigin degerle eslesiyor mu? "
+            "Eslesiyorsa 'Evet' de, zincir kaydedilsin."
+        )
+        if reply != QMessageBox.Yes:
+            self.log("Manuel pointer zinciri dogrulanamadi - kaydedilmedi.")
+            return
+
+        wa.offsets = offsets
+        wa.address = resolved_addr
+        self._refresh_freeze_table()
+        self.log(f"'{wa.name}' icin manuel pointer zinciri kaydedildi: {offsets}")
+        QMessageBox.information(
+            self, "Kaydedildi",
+            f"'{wa.name}' artik bu manuel zinciri kullaniyor.\n"
+            "Kalici olmasi icin 'Profili Kaydet'e basmayi unutma."
+        )
 
     def _find_pointer_chain_for_selected(self):
         idx = self._selected_watched_index()
