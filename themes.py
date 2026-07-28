@@ -121,6 +121,14 @@ _STYLESHEET_TEMPLATE = """
         font-size: 13px;
     }}
 
+    /* QWidget kurali her widget'a (QLabel dahil) KENDI opak arka planini
+       ciziyor - koyu zeminlerde fark edilmiyordu ama HeroCard gibi parlak
+       gradyanli kartlarin uzerinde metnin arkasinda cirkin bir "kutu"
+       olarak beliriyordu. Etiketleri seffaf yapip bunu onluyoruz; ozel
+       arka plan isteyen etiketler (#NewPill, #ProBadge vb.) daha ozgul
+       ID secicileri sayesinde yine de kendi rengini alir. */
+    QLabel, QCheckBox, QRadioButton {{ background-color: transparent; }}
+
     /* ---- Sol menu (sidebar) ---- */
     #Sidebar {{ background-color: {sidebar_bg}; border-right: 1px solid {border}; }}
     #Brand {{
