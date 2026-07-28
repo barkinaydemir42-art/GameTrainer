@@ -364,8 +364,18 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
         # Pencere durumu Windows tarafindan degistirildiginde de (ör. Win+Up
         # ile buyutme, gorev cubugundan geri yukleme) titlebar'daki buyut/geri
         # yukle ikonu guncel kalsin.
-        if event.type() == QEvent.WindowStateChange and self.title_bar is not None:
-            self.title_bar.sync_max_icon()
+        if event.type() == QEvent.WindowStateChange:
+            if self.title_bar is not None:
+                self.title_bar.sync_max_icon()
+            # Frameless + buyutulmus pencerelerde Windows, gorunmez sistem
+            # kenarligini ekranin disina tasirir (icerigin birkac piksel
+            # kirpilmasina neden olur) - klasik "overscan" hatasi. Buyutulmus
+            # halde kok layout'a kucuk bir ic pay vererek bunu telafi ediyoruz;
+            # normal boyuttayken pay sifira donuyor.
+            root_layout = self.centralWidget().layout()
+            if root_layout is not None:
+                pad = 7 if self.isMaximized() else 0
+                root_layout.setContentsMargins(pad, pad, pad, pad)
 
     def _log_safe(self, message: str):
         self.log(message)
