@@ -503,6 +503,61 @@ class LocalTrainerStudio(QMainWindow):
         effect.setOffset(0, y_offset)
         widget.setGraphicsEffect(effect)
 
+    def _build_empty_state(self, icon_name: str, title: str, desc: str,
+                            action_text: str = None, on_action=None) -> QWidget:
+        """Duz 'bos/henuz veri yok' metni yerine, ikon+baslik+aciklama ve
+        (opsiyonel) bir aksiyon butonu iceren ortalanmis bir panel. Kayitli
+        profil/oyun kutuphanesi gibi ilk acilista bos olan alanlarda kullanilir."""
+        wrap = QWidget()
+        wrap.setObjectName("EmptyState")
+        outer = QVBoxLayout(wrap)
+        outer.addStretch(1)
+
+        icon_wrap = QFrame()
+        icon_wrap.setObjectName("EmptyStateIconWrap")
+        icon_wrap.setFixedSize(56, 56)
+        icon_layout = QVBoxLayout(icon_wrap)
+        icon_layout.setContentsMargins(0, 0, 0, 0)
+        icon_lbl = QLabel()
+        icon_lbl.setAlignment(Qt.AlignCenter)
+        pix = get_pixmap(icon_name, color="#8a8b94", size=24)
+        if pix is not None:
+            icon_lbl.setPixmap(pix)
+        icon_layout.addWidget(icon_lbl, 0, Qt.AlignCenter)
+        icon_row = QHBoxLayout()
+        icon_row.addStretch(1)
+        icon_row.addWidget(icon_wrap)
+        icon_row.addStretch(1)
+        outer.addLayout(icon_row)
+        outer.addSpacing(12)
+
+        title_lbl = QLabel(title)
+        title_lbl.setObjectName("EmptyStateTitle")
+        title_lbl.setAlignment(Qt.AlignCenter)
+        outer.addWidget(title_lbl)
+
+        desc_lbl = QLabel(desc)
+        desc_lbl.setObjectName("EmptyStateDesc")
+        desc_lbl.setAlignment(Qt.AlignCenter)
+        desc_lbl.setWordWrap(True)
+        outer.addWidget(desc_lbl)
+
+        if action_text:
+            outer.addSpacing(14)
+            btn = QPushButton(action_text)
+            btn.setObjectName("SecondaryButton")
+            btn.setCursor(Qt.PointingHandCursor)
+            if on_action:
+                btn.clicked.connect(on_action)
+            btn_row = QHBoxLayout()
+            btn_row.addStretch(1)
+            btn_row.addWidget(btn)
+            btn_row.addStretch(1)
+            outer.addLayout(btn_row)
+
+        outer.addStretch(1)
+        return wrap
+
     # ------------------------------------------------------------------
     # DASHBOARD (ANA SAYFA)
     # ------------------------------------------------------------------
@@ -645,9 +700,22 @@ class LocalTrainerStudio(QMainWindow):
         profiles_header_row.addStretch(1)
         profiles_layout.addLayout(profiles_header_row)
 
+        self.dash_profile_stack = QStackedWidget()
+        self.dash_profile_stack.setFixedHeight(220)
+
         self.dash_profile_list = QListWidget()
-        self.dash_profile_list.setMaximumHeight(220)
-        profiles_layout.addWidget(self.dash_profile_list)
+        self.dash_profile_stack.addWidget(self.dash_profile_list)  # index 0
+
+        self.dash_profile_empty = self._build_empty_state(
+            "folder", "Henuz kayitli profil yok",
+            "Bir oyuna baglanip Freeze Manager'da 'Profili Kaydet'e bastiginda "
+            "burada listelenir.",
+            action_text="Trainer Wizard'i Ac",
+            on_action=lambda: self._nav_clicked("trainer"),
+        )
+        self.dash_profile_stack.addWidget(self.dash_profile_empty)  # index 1
+
+        profiles_layout.addWidget(self.dash_profile_stack)
         layout.addWidget(profiles_card)
 
         layout.addStretch(1)
@@ -730,9 +798,12 @@ class LocalTrainerStudio(QMainWindow):
             except Exception:
                 names = []
             if not names:
-                self.dash_profile_list.addItem("(kayitli profil yok)")
+                if hasattr(self, "dash_profile_stack"):
+                    self.dash_profile_stack.setCurrentWidget(self.dash_profile_empty)
             else:
                 self.dash_profile_list.addItems(names)
+                if hasattr(self, "dash_profile_stack"):
+                    self.dash_profile_stack.setCurrentWidget(self.dash_profile_list)
 
     # ------------------------------------------------------------------
     # OYUN KUTUPHANESI (Steam/Epic/GOG/Xbox otomatik algilama)
@@ -784,6 +855,14 @@ class LocalTrainerStudio(QMainWindow):
         self.library_scroll.setWidget(self.library_grid_container)
         card_layout.addWidget(self.library_scroll, 1)
 
+        self.library_grid.addWidget(
+            self._build_empty_state(
+                "grid", "Kutuphane henuz taranmadi",
+                "Steam, Epic, GOG ve Xbox uzerinden kurulu oyunlari bulmak icin "
+                "yukaridaki 'Kutuphaneyi Tara' butonuna bas.",
+            ), 0, 0, 1, 6,
+        )
+
         hint = QLabel(
             "Cift tikla: Trainer Wizard'a gonderir ve process adini doldurur. "
             "Attach islemi icin oyunun ACIK/CALISIYOR olmasi gerekir. Kapak "
@@ -829,15 +908,24 @@ class LocalTrainerStudio(QMainWindow):
         self._library_cards = []
 
         columns = 6
-        for i, g in enumerate(games):
-            card = GameCard(i, g)
-            card.activated.connect(self._on_library_card_activated)
-            self.library_grid.addWidget(card, i // columns, i % columns)
-            self._library_cards.append(card)
-
         if games:
+            for i, g in enumerate(games):
+                card = GameCard(i, g)
+                card.activated.connect(self._on_library_card_activated)
+                self.library_grid.addWidget(card, i // columns, i % columns)
+                self._library_cards.append(card)
             self.library_status_label.setText(f"{len(games)} oyun bulundu.")
         else:
+            self.library_grid.addWidget(
+                self._build_empty_state(
+                    "grid", "Oyun bulunamadi",
+                    "Bu ozellik sadece Windows'ta ve Steam/Epic/GOG/Xbox kuruluysa "
+                    "calisir. Yine de 'Trainer Wizard' sekmesinden '.exe Sec' ile "
+                    "elle bir oyun secebilirsin.",
+                    action_text="Trainer Wizard'i Ac",
+                    on_action=lambda: self._nav_clicked("trainer"),
+                ), 0, 0, 1, columns,
+            )
             self.library_status_label.setText(
                 "Oyun bulunamadi. (Bu ozellik sadece Windows'ta ve Steam/Epic/GOG/Xbox "
                 "kuruluysa calisir.)"
@@ -893,12 +981,15 @@ class LocalTrainerStudio(QMainWindow):
         layout.setSpacing(16)
 
         step_list = QListWidget()
+        step_list.setObjectName("StepperList")
         step_list.addItems([
-            "1. Game Attach", "2. Scan Values",
-            "3. Freeze Pointers", "4. Build Trainer.exe",
+            "\u2460  Oyuna Baglan", "\u2461  Deger Tara",
+            "\u2462  Pointer Dondur", "\u2463  Trainer.exe Olustur",
         ])
         step_list.setCurrentRow(0)
-        step_list.setMaximumWidth(200)
+        step_list.setMaximumWidth(210)
+        step_list.setFrameShape(QFrame.NoFrame)
+        self.wiz_step_list = step_list
 
         stack = QStackedWidget()
 
@@ -932,7 +1023,6 @@ class LocalTrainerStudio(QMainWindow):
 
         btn_detach = QPushButton("Baglantiyi Kes (Detach)")
         btn_detach.setObjectName("DangerButton")
-        btn_detach.setStyleSheet("background-color: #555555;")
         btn_detach.clicked.connect(self._detach)
         p1.addWidget(btn_detach)
 
@@ -1060,6 +1150,8 @@ class LocalTrainerStudio(QMainWindow):
         else:
             base_str = f"BULUNAMADI ({self.engine.base_address_error})"
         self.wiz_attach_status.setText(f"Durum: BAGLI -> {process_name} (base={base_str})")
+        if hasattr(self, "wiz_step_list"):
+            self.wiz_step_list.setCurrentRow(1)
         self._rename_game_tab(process_name)
         self.status_bar.showMessage(f"Bagli: {process_name}")
         self.log(f"Baglanildi: {process_name}")
@@ -1767,7 +1859,6 @@ class LocalTrainerStudio(QMainWindow):
         btn_row.addWidget(btn_unfreeze_all)
         btn_clear_all = QPushButton("Tumunu Sil")
         btn_clear_all.setObjectName("DangerButton")
-        btn_clear_all.setStyleSheet("background-color: #B71C1C;")
         btn_clear_all.clicked.connect(self._clear_all_watched)
         btn_row.addWidget(btn_clear_all)
         btn_save = QPushButton("Profili Kaydet")
@@ -2313,7 +2404,6 @@ class LocalTrainerStudio(QMainWindow):
         btn_nop.clicked.connect(self._apply_nop_fill)
         btn_undo = QPushButton("Geri Al (Restore Original Bytes)")
         btn_undo.setObjectName("SecondaryButton")
-        btn_undo.setStyleSheet("background-color: #B71C1C; color: white;")
         btn_undo.clicked.connect(self._undo_patch)
         r3.addWidget(btn_patch)
         r3.addWidget(btn_nop)

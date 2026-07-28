@@ -309,6 +309,29 @@ _STYLESHEET_TEMPLATE = """
     QListWidget::item:selected {{ background-color: {accent}; color: white; }}
     QListWidget::item:hover:!selected {{ background-color: {hover_bg}; }}
 
+    /* ---- Wizard adim listesi (stepper) ---- */
+    #StepperList {{
+        background-color: {card_bg}; border: 1px solid {border};
+        border-radius: 12px; padding: 8px 6px;
+    }}
+    #StepperList::item {{
+        padding: 11px 12px; border-radius: 9px; margin: 3px 2px;
+        color: {text_muted}; font-weight: 600; border: 1px solid transparent;
+    }}
+    #StepperList::item:selected {{
+        background-color: {surface}; color: #ffffff;
+        border: 1px solid {accent}; border-left: 3px solid {accent};
+    }}
+    #StepperList::item:hover:!selected {{ background-color: {hover_bg}; color: {text_soft}; }}
+
+    /* ---- Bos durum (empty state) kartlari ---- */
+    #EmptyState {{ background-color: transparent; }}
+    #EmptyStateIconWrap {{
+        background-color: {surface}; border-radius: 28px; border: 1px solid {border};
+    }}
+    #EmptyStateTitle {{ color: {text_soft}; font-size: 14px; font-weight: 700; }}
+    #EmptyStateDesc {{ color: {text_muted}; font-size: 12px; }}
+
     /* ---- Checkbox / Radio ---- */
     QCheckBox, QRadioButton {{ spacing: 8px; color: {text_soft}; padding: 2px 0; }}
     QCheckBox::indicator, QRadioButton::indicator {{
