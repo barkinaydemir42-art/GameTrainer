@@ -29,13 +29,15 @@ from PyQt5.QtWidgets import (
     QMessageBox, QListWidget, QGroupBox, QSplitter, QStackedWidget,
     QFileDialog, QInputDialog, QCheckBox, QHeaderView, QListWidgetItem,
     QProgressBar, QButtonGroup, QFrame, QSizePolicy, QAbstractItemView,
-    QScrollArea, QGraphicsDropShadowEffect, QGridLayout
+    QScrollArea, QGraphicsDropShadowEffect, QGridLayout,
+    QSystemTrayIcon, QMenu, QAction
 )
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize, QEvent
-from PyQt5.QtGui import QPixmap, QPainter, QColor
+from PyQt5.QtGui import QPixmap, QPainter, QColor, QIcon
 
 from title_bar import CustomTitleBar
 from frameless_window import FramelessResizeMixin, enable_dwm_shadow, enable_rounded_corners
+from toast import show_toast
 from memory_engine import (
     MemoryEngine, WatchedAddress, list_processes, list_processes_with_windows, ALL_TYPES,
 )
@@ -312,6 +314,9 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
         # manifest URL girilmisse). Ag hatasi olursa sadece logla, rahatsiz etme.
         if self.app_config.get("auto_check_updates") and self.app_config.get("update_manifest_url"):
             QTimer.singleShot(1500, lambda: self._check_for_updates(silent=True))
+
+        self._force_quit = False
+        self._init_tray_icon()
 
     # ------------------------------------------------------------------
     def showEvent(self, event):
@@ -1203,6 +1208,7 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
         self._rename_game_tab(process_name)
         self.status_bar.showMessage(f"Bagli: {process_name}")
         self.log(f"Baglanildi: {process_name}")
+        show_toast(self, f"Baglanildi: {process_name}", kind="success")
         if self.engine.base_address is None:
             self.log(
                 "UYARI: module base adresi bulunamadi - pointer zinciri "
@@ -1224,6 +1230,7 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
         self._rename_game_tab("Bagli Degil")
         self.status_bar.showMessage("Baglanti kesildi.")
         self.log("Baglanti kesildi.")
+        show_toast(self, "Baglanti kesildi.", kind="info")
         self._refresh_dashboard()
 
     def _try_autoload_profile(self, process_name):
@@ -2285,6 +2292,8 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
                     wa.frozen_value = self.engine.read_value(addr, wa.value_type)
                 except Exception:
                     pass
+        show_toast(self, f"{wa.name}: {'donduruldu' if checked else 'serbest birakildi'}",
+                   kind="success" if checked else "info", duration_ms=1800)
 
     def _refresh_freeze_table(self):
         """Tam yeniden cizim - yapisal degisikliklerde (ekleme/silme/profil
@@ -2490,6 +2499,7 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
         self.byte_patches[address] = original
         self.patch_list.addItem(f"{hex(address)} -> orijinal: {original.hex(' ')}")
         self.log(f"Patch uygulandi: {hex(address)} ({len(new_bytes)} byte)")
+        show_toast(self, f"Patch uygulandi: {hex(address)}", kind="success")
 
     def _apply_nop_fill(self):
         if not self._require_attached():
@@ -2530,6 +2540,7 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
         del self.byte_patches[address]
         self.patch_list.takeItem(self.patch_list.row(selected))
         self.log(f"Patch geri alindi: {hex(address)}")
+        show_toast(self, f"Patch geri alindi: {hex(address)}", kind="info")
 
     # ------------------------------------------------------------------
     # 5) SCRIPT ENGINE
@@ -2692,6 +2703,7 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
             return
         msg = f"Yeni surum bulundu: v{info.version} (senin surumun: v{updater.CURRENT_VERSION})"
         self.log(msg)
+        show_toast(self, f"Yeni surum mevcut: v{info.version}", kind="warning", duration_ms=4500)
         if hasattr(self, "update_status_label"):
             self.update_status_label.setText(msg)
         if hasattr(self, "update_changelog"):
@@ -2821,9 +2833,60 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
         self.log(f"Tema degistirildi: {themes.THEME_LABELS.get(theme_key, theme_key)}")
 
     def closeEvent(self, event):
+        # WeMod gibi: pencereyi kapatmak uygulamayi tamamen sonlandirmaz,
+        # arka planda (tepsi/tray) calismaya devam eder - freeze/hotkey'ler
+        # oyun acikken calismaya devam etsin diye. Gercek cikis icin
+        # tepsi menusundeki "Cikis" kullanilir.
+        if (not self._force_quit) and hasattr(self, "tray_icon") and self.tray_icon.isVisible():
+            event.ignore()
+            self.hide()
+            if not self.app_config.get("_tray_hint_shown"):
+                self.app_config["_tray_hint_shown"] = True
+                config_manager.save_config(self.app_config)
+                self.tray_icon.showMessage(
+                    "LocalTrainer Studio arka planda calisiyor",
+                    "Tamamen kapatmak icin tepsi simgesine sag tikla -> Cikis.",
+                    QSystemTrayIcon.Information, 4000,
+                )
+            return
         self.hotkeys.unregister_all()
         self.engine.detach()
         event.accept()
+
+    def _init_tray_icon(self):
+        """WeMod tarzi sistem tepsisi simgesi: pencereyi gizle/goster ve
+        gercek cikis buradan yonetilir."""
+        pix = get_pixmap("bolt", color="#7c5cff", size=32)
+        icon = QIcon(pix) if pix is not None else self.windowIcon()
+        self.tray_icon = QSystemTrayIcon(icon, self)
+        self.tray_icon.setToolTip("LocalTrainer Studio")
+
+        menu = QMenu()
+        act_show = QAction("Ac / Goster", self)
+        act_show.triggered.connect(self._restore_from_tray)
+        act_quit = QAction("Cikis", self)
+        act_quit.triggered.connect(self._quit_from_tray)
+        menu.addAction(act_show)
+        menu.addSeparator()
+        menu.addAction(act_quit)
+        self.tray_icon.setContextMenu(menu)
+        self.tray_icon.activated.connect(self._on_tray_activated)
+        self.tray_icon.show()
+
+    def _on_tray_activated(self, reason):
+        if reason == QSystemTrayIcon.Trigger or reason == QSystemTrayIcon.DoubleClick:
+            self._restore_from_tray()
+
+    def _restore_from_tray(self):
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def _quit_from_tray(self):
+        self._force_quit = True
+        self.tray_icon.hide()
+        self.close()
+        QApplication.instance().quit()
 
 
 if __name__ == '__main__':
