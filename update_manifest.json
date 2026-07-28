@@ -1,8 +1,8 @@
 {
-  "version": "1.2.3",
-  "changelog": "Otomatik yayin: v1.2.3",
-  "download_url": "https://github.com/barkinaydemir42-art/GameTrainer/releases/download/v1.2.3/LocalTrainerStudio-Setup.exe",
-  "sha256": "c250bd94e8ec2426ca38c6dd9c9d0d2838f51b1461caf6576ce41f3aa21a2bd5",
+  "version": "1.2.4",
+  "changelog": "Otomatik yayin: v1.2.4",
+  "download_url": "https://github.com/barkinaydemir42-art/GameTrainer/releases/download/v1.2.4/LocalTrainerStudio-Setup.exe",
+  "sha256": "37d0002d3e5b06f6413c09d1dbc059ad7d6047970116b199be357f4b82264109",
   "installer": true,
   "silent_args": "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS"
 }
