@@ -2861,7 +2861,9 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
         layout.addWidget(QLabel(
             "Kisitli Script Motoru (guvenlik icin sadece asagidaki komutlari destekler):\n"
             "  isim = ScanPattern('A1 ?? ?? ?? ??')   |   Freeze(isim, deger)\n"
-            "  Write(isim, deger)                      |   Log('mesaj')"
+            "  Write(isim, deger)                      |   Log('mesaj')\n"
+            "  Trigger ad: isim < deger .. EndTrigger   (kosul saglaninca 1 kez calisir)\n"
+            "  Timer ad: saniye .. EndTimer             (her N saniyede bir calisir)"
         ))
 
         self.script_editor = QTextEdit()
@@ -2869,7 +2871,16 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
             "-- Ornek Script\n"
             "HealthAddr = ScanPattern('A1 ?? ?? ?? ?? 8B 45 FC')\n"
             "Freeze(HealthAddr, 999)\n"
-            "Log('Can dondu')"
+            "Log('Can dondu')\n\n"
+            "-- Kosullu tetikleyici: can 20'nin altina dusunce bir kez doldur\n"
+            "Trigger AdSuyu: HealthAddr < 20\n"
+            "    Write(HealthAddr, 999)\n"
+            "    Log('Can azaldi, dolduruldu')\n"
+            "EndTrigger\n\n"
+            "-- Zamanlayici: her 5 saniyede bir logla\n"
+            "Timer Periyodik: 5\n"
+            "    Log('5 saniye gecti')\n"
+            "EndTimer"
         )
         layout.addWidget(self.script_editor)
 
@@ -2884,12 +2895,18 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
         if not self._require_attached():
             return
         text = self.script_editor.toPlainText()
+        self.script_engine.reset_triggers()
         try:
             self.script_engine.run(text)
         except ScriptError as e:
             QMessageBox.critical(self, "Script Hatasi", str(e))
             return
-        self.log("Script calistirildi.")
+        n_trig = len(self.script_engine.triggers)
+        n_timer = len(self.script_engine.timers)
+        extra = ""
+        if n_trig or n_timer:
+            extra = f" ({n_trig} trigger, {n_timer} zamanlayici aktif)"
+        self.log(f"Script calistirildi.{extra}")
 
     # ------------------------------------------------------------------
     # 6) GUNCELLEME
@@ -3123,6 +3140,7 @@ class LocalTrainerStudio(FramelessResizeMixin, QMainWindow):
                     except Exception:
                         pass
         self.script_engine.apply_frozen()
+        self.script_engine.tick()
         self._update_freeze_values_only()
 
     # ------------------------------------------------------------------
